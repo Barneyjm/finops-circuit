@@ -27,12 +27,14 @@ $ finops analyze samples --backend fake
 flowchart LR
   subgraph IN["Conversations in"]
     WC["WildChat-4.8M<br/>(HF datasets server)"]
-    LOGS["Your own LLM logs<br/>+ declared tags<br/>(API key, project)"]
+    LOGS["Gateway logs<br/>LiteLLM / Helicone / OpenAI<br/>+ declared tags (team, key)"]
   end
 
   FETCH["conversations.py<br/>fetch + normalise<br/>keeps model, time, turns, tokens<br/>drops location, IP, headers"]
   WC --> FETCH --> JSONL[("data/*.jsonl")]
-  LOGS --> JSONL
+  IMPORT["logs.py<br/>stitch calls into threads<br/>measured usage per reply"]
+  LOGS --> IMPORT --> JSONL
+  JSONL -- "--sample N:<br/>cost-weighted draws" --> SAMPLE["only the drawn<br/>conversations are tagged"]
 
   subgraph PER["Per conversation (agent.py)"]
     PRICE["pricing.py<br/>tokens x prices.toml<br/>measured usage, cache price, discount"]
@@ -45,8 +47,8 @@ flowchart LR
   TAGS["tags.py<br/>app = prompt-template fingerprint<br/>across the whole set (code, no model)"]
 
   subgraph BE["Swappable backend (one flag)"]
+    CIR["circuit-1.7b (default), circuit-8b<br/>Modal / home tier / local"]
     JEV["Jev (TypeSafe)"]
-    CIR["circuit-1.7b<br/>Modal / home tier / local"]
     CHAT["OpenAI / Anthropic"]
     FAKE["fake<br/>(hand-written answers)"]
   end
@@ -79,12 +81,14 @@ git clone https://github.com/Barneyjm/finops-circuit && cd finops-circuit
 uv sync
 cp .env.example .env                                   # one key for the backend you pick
 uv run finops fetch --n 200                            # a WildChat-4.8M sample into data/
-uv run finops report data/wildchat.jsonl --backend jev --by task,subtask
+uv run finops report data/wildchat.jsonl --by task,subtask       # circuit-1.7b by default; --backend jev for TypeSafe
 ```
 
 | | |
 |---|---|
 | `finops fetch --n N` | N real conversations from WildChat-4.8M into `data/wildchat.jsonl` |
+| `finops import logs.jsonl --out data/mine.jsonl` | your gateway's logs (LiteLLM, Helicone, OpenAI request/response pairs) as conversations |
+| `finops report ... --sample 400` | tag 400 cost-weighted draws instead of every conversation; shares with 90% intervals |
 | `finops analyze <file or dir>` | per conversation: tags, cost, actions, the gate traces |
 | `finops report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
 | `finops report ... --save findings.json` then `finops html findings.json` | the dashboard: one self-contained HTML file (conversation text left out unless `--with-text`) |
@@ -93,8 +97,9 @@ uv run finops report data/wildchat.jsonl --backend jev --by task,subtask
 | `finops diagram` | the circuit as Mermaid |
 
 `--backend` picks the model, as in [call-center-circuit](https://github.com/Barneyjm/call-center-circuit):
-`jev`, `circuits`, `local`, `semif`, `openai`, `anthropic`, or `fake` (hand-written answers in
-`samples/`, no network).
+`circuits` (the default: circuit-1.7b hosted, a free key is issued; `--model circuit-8b` for the
+8B), `local` (the same weights on your machine), `jev`, `semif`, `openai`, `anthropic`, or `fake`
+(hand-written answers in `samples/`, no network).
 
 ## The tags
 
@@ -155,6 +160,35 @@ through to the report, the dashboard and FOCUS, and a declared `team` wins over 
 one. The file is checked on load: a parent that is not a tag, an action value that is not an
 option, or a tag named `app` (set in code) is refused.
 
+## Your own logs
+
+`finops import` reads a gateway's log export and stitches its calls back into conversations
+(a chat API is sent the whole history on every call, so the calls of one thread are prefixes of
+each other). Each reply keeps the provider's token counts, cached included, so input and cache
+figures are measured rather than estimated.
+
+| format | rows | declared tags from |
+|---|---|---|
+| `litellm` | StandardLoggingPayload (a logging callback, or the spend-log export) | team alias, key alias, requester_metadata, request_tags |
+| `helicone` | request rows from the Helicone query API | request_properties (the `Helicone-Property-*` headers) |
+| `openai` | `{"request": ..., "response": ...}` per line | the request's `metadata` |
+
+User ids are dropped: a tag names a team or a product, not a person. Assistant messages that
+arrive inside a prompt (few-shot examples) bill as input, not as replies.
+
+## Sampling
+
+Tagging costs a model call per conversation; spend does not. `--sample N` computes every
+conversation's cost first, then tags N draws made with probability proportional to cost, with
+replacement. Each draw then stands for the same share of spend, so the share of spend with a
+tag is the share of draws with it, and resampling the draws gives its interval. Spend is still
+the whole log's, exactly.
+
+On the 1,000 WildChat conversations, 20 samples of 200 draws each: the 90% intervals held the
+full run's task shares 144 times out of 160 (90%), about five points either side. At 1% of a
+large log the model bill is 1% of a full run; the interval depends on the number of draws, not
+the size of the log.
+
 ## FOCUS
 
 `finops focus` writes the findings as a [FOCUS 1.4](https://focus.finops.org) Cost and Usage
@@ -181,6 +215,16 @@ recorded any) and output.
 FOCUS wants one prefix-free user tag scheme and a prefix on every other, so what a conversation
 declares keeps its keys and what this tool infers carries `finops-circuit/`. Untagged and n/a
 values are left out of Tags. Quantities the log did not record are marked `x_QuantityEstimated`.
+A kind of token a conversation did not use gets no row.
+
+Checked with the FinOps Foundation's
+[focus-validator](https://github.com/finopsfoundation/focus-spec-validator) 2.2.1 against
+FOCUS 1.3 (its 1.4 rule set stops on an internal dependency cycle before reading data): no rule
+fails on a column this export writes. The failures it lists are for columns that do not apply
+to LLM usage (commitment discounts, capacity reservations, contract application), plus one
+ConsumedQuantity rule whose generated SQL tests the inverse of its own text. The validator opens
+`focus_validator/rules/currency_codes.csv` by a relative path, so run it from a directory that
+has that file.
 
 ## What the report recommends
 

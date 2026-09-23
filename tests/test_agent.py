@@ -1,5 +1,6 @@
 """The circuit, the pricing and the report, with the hand-written answers in samples/: no network."""
 
+import copy
 import json
 from pathlib import Path
 
@@ -347,3 +348,26 @@ def test_v2_questions_default_on_for_v2_models_only():
 
     assert speaks_v2("circuits", None) and speaks_v2("local", "circuit-1.7b")
     assert not speaks_v2("circuits", "circuit-8b") and not speaks_v2("jev", None)
+
+
+def test_a_cost_weighted_sample_estimates_the_census_within_its_intervals():
+    from finops import sample
+
+    pop = [dict(c, id=f"{cid}-{k}", turns=c["turns"] * (1 + k % 4)) for cid, c in SAMPLES.items() for k in range(20)]
+    census = [analyze(c, FakeBackend(), circuit=V2, app=APPS[c["id"].rsplit("-", 1)[0]]) for c in pop]
+    truth = report(census, ("task",))
+    draws = sample([f.cost.usd for f in census], 300, seed=1)
+    per = truth["spend_usd"] / 300
+    est = []
+    for i, n in draws.items():
+        f = copy.deepcopy(census[i])
+        f.draws, f.weight_usd = n, n * per
+        est.append(f)
+    r = report(est, ("task",))
+    assert r["spend_usd"] == pytest.approx(truth["spend_usd"], rel=1e-3) and r["sample"]["draws"] == 300
+    for k, g in truth["groups"].items():
+        if g["share"] >= 0.05:
+            lo, hi = r["groups_ci"][k]
+            assert lo - 0.02 <= g["share"] <= hi + 0.02, (k, g["share"], r["groups_ci"][k])
+    lo, hi = r["intervals"]["savings_share"]
+    assert lo - 0.02 <= truth["savings_share"] <= hi + 0.02

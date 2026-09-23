@@ -27,6 +27,9 @@ def _row(f: Finding, i: int, text: str | None) -> dict[str, Any]:
         "month": (f.timestamp or "")[:7] or None,
         "replies": f.turns,
         "usd": c.usd,
+        "w": f.spend,  # what it counts for in totals: itself, or in a sample the spend it stands for
+        "save_w": f.savings_usd * f.scale,
+        "draws": f.draws if f.weight_usd is not None else 0,
         "in": c.input_tokens,
         "cached": c.cached_tokens,
         "out": c.output_tokens,
@@ -215,7 +218,8 @@ footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--rul
 <script>
 const DATA = __DATA__;
 const rows = DATA.rows;
-const total = rows.reduce((s, r) => s + r.usd, 0);
+const total = rows.reduce((s, r) => s + r.w, 0);
+const draws = rows.reduce((s, r) => s + r.draws, 0);  // 0 unless the findings are a sample
 const axis = (x) => (x === 0 ? "$0" : x >= 1 ? "$" + x.toFixed(x % 1 ? 2 : 0) : "$" + x.toFixed(x >= 0.1 ? 2 : 3));
 const fmt = (x) => x >= 1 ? "$" + x.toFixed(2) : x >= 0.01 ? "$" + x.toFixed(3) : "$" + x.toFixed(4);
 const pct = (x) => (total ? (100 * x / total) : 0).toFixed(x / total < 0.1 ? 1 : 0) + "%";
@@ -229,14 +233,15 @@ function load(k) { try { return localStorage.getItem(k); } catch (e) { return nu
 (function () {
   let saved = 0, tagged = 0, biz = 0, tin = 0, tc = 0, tout = 0;
   for (const r of rows) {
-    saved += r.savings; tin += r.in; tc += r.cached; tout += r.out;
-    if (!Object.values(r.tags).includes("untagged")) tagged += r.usd;
-    if (r.business === true) biz += r.usd;
+    const k = r.usd ? r.w / r.usd : 0;
+    saved += r.save_w; tin += r.in * k; tc += r.cached * k; tout += r.out * k;
+    if (!Object.values(r.tags).includes("untagged")) tagged += r.w;
+    if (r.business === true) biz += r.w;
   }
   const ms = rows.map((r) => r.month).filter(Boolean).sort();
   const mon = (k) => new Date(k + "-01T00:00:00").toLocaleString("en", { month: "short", year: "numeric" });
   const short = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
-  const items = [["Spend", fmt(total)], ["Tokens", `${short(tin)} in${tc ? ", " + short(tc) + " cached" : ""}, ${short(tout)} out`, "txt"], ["Conversations", rows.length.toLocaleString("en")], ...(ms.length ? [["Period", mon(ms[0]) + " to " + mon(ms[ms.length - 1]), "txt"]] : []), ["Fully tagged", pct(tagged)], ["Business use", pct(biz)], ["Savings found", fmt(saved) + " (" + pct(saved) + ")", "good"]];
+  const items = [["Spend", fmt(total)], ["Tokens", `${short(tin)} in${tc ? ", " + short(tc) + " cached" : ""}, ${short(tout)} out`, "txt"], draws ? ["Sampled", `${rows.length.toLocaleString("en")} conversations, ${draws} cost-weighted draws`, "txt"] : ["Conversations", rows.length.toLocaleString("en")], ...(ms.length ? [["Period", mon(ms[0]) + " to " + mon(ms[ms.length - 1]), "txt"]] : []), ["Fully tagged", pct(tagged)], ["Business use", pct(biz)], ["Savings found", fmt(saved) + " (" + pct(saved) + ")", "good"]];
   document.getElementById("statement").innerHTML = items.map(([k, v, c]) => `<div><dt>${k}</dt><dd class="num ${c || ""}">${v}</dd></div>`).join("");
   const models = new Set(rows.map((r) => r.model)).size;
   document.getElementById("lede").textContent = `${rows.length.toLocaleString("en")} conversations across ${models} models, tagged by ${DATA.backend || "a decision model"}${DATA.source ? " from " + DATA.source : ""}. Pick the tags to group by; click a group to see its conversations.`;
@@ -257,7 +262,7 @@ function keyOf(r) { return by2.value && by2.value !== by1.value ? val(r, by1.val
 
 function groups() {
   const g = new Map();
-  for (const r of rows) { const k = keyOf(r); const x = g.get(k) || { key: k, n: 0, usd: 0 }; x.n++; x.usd += r.usd; g.set(k, x); }
+  for (const r of rows) { const k = keyOf(r); const x = g.get(k) || { key: k, n: 0, usd: 0 }; x.n++; x.usd += r.w; g.set(k, x); }
   return [...g.values()].sort((a, b) => b.usd - a.usd);
 }
 
@@ -310,7 +315,7 @@ function timechart(gs) {
   const top = gs.slice(0, 6).map((g) => g.key), rest = "everything else";
   const band = (r) => (top.includes(keyOf(r)) ? keyOf(r) : rest);
   const cells = new Map(); // month -> band -> usd
-  for (const r of rows) { if (!r.month) continue; const mm = cells.get(r.month) || new Map(); mm.set(band(r), (mm.get(band(r)) || 0) + r.usd); cells.set(r.month, mm); }
+  for (const r of rows) { if (!r.month) continue; const mm = cells.get(r.month) || new Map(); mm.set(band(r), (mm.get(band(r)) || 0) + r.w); cells.set(r.month, mm); }
   const tot = all.map((mo) => [...(cells.get(mo) || new Map()).values()].reduce((a, b) => a + b, 0));
   const maxV = Math.max(...tot, 1e-9);
   const step = (() => { const raw = maxV / 4; const p = 10 ** Math.floor(Math.log10(raw)); return [1, 2, 2.5, 5, 10].map((k) => k * p).find((k) => k >= raw); })();
@@ -341,7 +346,7 @@ function pick(k) { filter = filter === k ? null : k; draw(); document.getElement
 // ---- coverage
 (function () {
   document.getElementById("coverage").innerHTML = DATA.keys.map((k) => {
-    const part = (f) => rows.filter(f).reduce((s, r) => s + r.usd, 0) / (total || 1);
+    const part = (f) => rows.filter(f).reduce((s, r) => s + r.w, 0) / (total || 1);
     const d = part((r) => r.tags[k] !== "untagged" && r.source[k] === "declared");
     const i = part((r) => r.tags[k] !== "untagged" && r.source[k] === "inferred");
     const c = part((r) => r.tags[k] !== "untagged" && r.source[k] === "code");
@@ -358,7 +363,7 @@ const ACT = { "policy": ["var(--crit)", "Spend with no business use"], "hold": [
   "trim context": ["var(--accent)", "Long conversation resending its history"], "review": ["var(--warn)", "Could not be tagged: a person reviews"] };
 (function () {
   const m = new Map();
-  for (const r of rows) for (const a of r.actions) { const x = m.get(a.k) || { n: 0, save: 0 }; x.n++; x.save += a.usd; m.set(a.k, x); }
+  for (const r of rows) for (const a of r.actions) { const x = m.get(a.k) || { n: 0, save: 0 }; x.n++; x.save += r.usd ? a.usd * r.w / r.usd : 0; m.set(a.k, x); }
   document.getElementById("actions").innerHTML = [...m.entries()].sort((a, b) => b[1].save - a[1].save || b[1].n - a[1].n).map(([h, x]) => {
     const [c, what] = ACT[h] || ["var(--muted)", h];
     return `<div class="act" style="--c:${c}"><span class="dot"></span><span><b>${esc(h)}</b> <span style="color:var(--muted)">${what}</span></span><span class="num">${x.n}${x.save ? ", " + fmt(x.save) : ""}</span></div>`;
@@ -393,6 +398,7 @@ function toggle(tr) {
 
 const measured = rows.filter((r) => r.measured).length;
 document.getElementById("foot").innerHTML = `Tagged ${DATA.date}${DATA.backend ? " by " + esc(DATA.backend) : ""}. Spend is tokens times list prices from the price table; ${measured === rows.length ? "token counts are the provider's own" : measured ? `${measured.toLocaleString("en")} conversations carry the provider's token counts, the rest are estimated at four characters a token` : "the log records no input or cache counts, so input tokens are estimated at four characters a token and nothing counts as cached"}. ` +
+  (draws ? `Spend is the whole log's; shares, tags and savings are estimated from ${draws} draws, each conversation drawn in proportion to its cost, so every draw stands for the same ${fmt(total / draws)}. ` : "") +
   `A tag below the circuit's confidence floor is <i>untagged</i>, never guessed. Conversation text is not included. Built with finops-circuit on decision circuits.`;
 draw();
 </script>

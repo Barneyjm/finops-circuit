@@ -120,14 +120,15 @@ def bill(c: Cost, table: PriceTable) -> Cost:
 
 
 def cost(model: str, turns: list[dict], prices: PriceTable | None = None) -> Cost:
-    """`turns`: [{"role", "content", "tokens"?, "usage"?}], in order. An assistant turn's
-    `usage` ({"input_tokens", "output_tokens", "cached_tokens"}) is the provider's own count."""
+    """`turns`: [{"role", "content", "tokens"?, "usage"?, "prompt"?}], in order. An assistant turn's
+    `usage` ({"input_tokens", "output_tokens", "cached_tokens"}) is the provider's own count; one
+    marked `prompt` was sent as input (a few-shot example), not generated, and bills as input."""
     history = sent = 0  # sent: tokens already sent once as input
     total_in = cached = total_out = measured_out = resent = replies = 0
     measured_in = True
     for t in turns:
         n = t.get("tokens") or tokens(t["content"])
-        if t["role"] == "assistant":
+        if t["role"] == "assistant" and not t.get("prompt"):  # a reply generated on this bill
             replies += 1
             u = t.get("usage") or {}
             if "input_tokens" in u:

@@ -118,12 +118,14 @@ def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: st
             "x_Actions": json.dumps([a.text for a in f.actions], ensure_ascii=False),
             "x_BusinessUse": "" if f.business is None else str(bool(f.business)).lower(),
         }
-        charges = [("input", c.input_tokens - c.cached_tokens, c.input_usd, not c.input_measured)]
-        if c.cached_tokens:
-            charges.append(("cached-input", c.cached_tokens, c.cached_usd, not c.input_measured))
-        charges.append(("output", c.output_tokens, c.output_usd, c.output_measured < c.output_tokens))
+        charges = [
+            ("input", c.input_tokens - c.cached_tokens, c.input_usd, not c.input_measured),
+            ("cached-input", c.cached_tokens, c.cached_usd, not c.input_measured),
+            ("output", c.output_tokens, c.output_usd, c.output_measured < c.output_tokens),
+        ]
+        charges = [ch for ch in charges if ch[1] > 0]  # no row for a kind of token the conversation did not use
         for i, (kind, tokens, list_cost, estimated) in enumerate(charges):
-            unit = round(list_cost / tokens * 1e6, 6) if tokens else 0.0  # per million, as the table had it
+            unit = round(list_cost / tokens * 1e6, 6)  # per million, as the table had it
             contracted = list_cost * (1 - discount)
             yield shared | {
                 "ChargeDescription": f"{f.model} {kind.replace('-', ' ')} tokens",
