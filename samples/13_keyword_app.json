@@ -1,26 +1,26 @@
 {
- "id": "03_meeting_summary",
- "model": "gpt-4o-2024-05-13",
+ "id": "13_keyword_app",
+ "model": "gpt-4o-2024-08-06",
  "language": "English",
  "turns": [
   {
    "role": "user",
-   "content": "Summarise these notes into three action items with owners: Priya to send the Q3 budget draft by Tuesday; Tom checks the vendor contract renewal date; everyone reviews the hiring plan before Thursday's sync.",
+   "content": "Provide only relevant keywords to facilitate an online search for the product below. Return a comma-separated list and nothing else.\nProduct: organic cotton baby blanket",
    "tokens": null
   },
   {
    "role": "assistant",
-   "content": "1. Priya: send the Q3 budget draft by Tuesday. 2. Tom: confirm the vendor contract renewal date. 3. Everyone: review the hiring plan before Thursday's sync.",
-   "tokens": 45
+   "content": "organic cotton blanket, baby blanket, swaddle, nursery bedding",
+   "tokens": 20
   }
  ],
  "expected_answers": {
   "task": {
    "code": 0.0136,
    "writing": 0.0136,
-   "summarization": 0.85,
+   "summarization": 0.0136,
    "translation": 0.0136,
-   "extraction": 0.0136,
+   "extraction": 0.85,
    "classification": 0.0136,
    "data_analysis": 0.0136,
    "research": 0.0136,
@@ -30,21 +30,21 @@
    "other": 0.0136
   },
   "subtask": {
-   "document": 0.05,
-   "article": 0.05,
-   "conversation": 0.05,
-   "list_notes": 0.85
+   "keywords": 0.85,
+   "entities": 0.05,
+   "structured": 0.05,
+   "answer_span": 0.05
   },
   "domain": {
    "software": 0.0125,
-   "marketing_sales": 0.0125,
+   "marketing_sales": 0.85,
    "customer_support": 0.0125,
    "finance": 0.0125,
    "legal": 0.0125,
    "hr_people": 0.0125,
    "education": 0.0125,
    "health": 0.0125,
-   "operations": 0.85,
+   "operations": 0.0125,
    "science_engineering": 0.0125,
    "media_entertainment": 0.0125,
    "personal_life": 0.0125,
@@ -55,18 +55,18 @@
    "dev_test": 0.1
   },
   "workload": {
-   "interactive": 0.9,
-   "automated": 0.1
+   "interactive": 0.1,
+   "automated": 0.9
   },
   "data_class": {
-   "public": 0.05,
-   "internal": 0.85,
+   "public": 0.85,
+   "internal": 0.05,
    "confidential": 0.05,
    "regulated": 0.05
   },
   "work": {
-   "yes": 0.95,
-   "no": 0.05
+   "yes": 0.9,
+   "no": 0.1
   },
   "complexity": {
    "0": 0.8,
@@ -79,8 +79,8 @@
    "no": 0.05
   },
   "repeatable": {
-   "yes": 0.3,
-   "no": 0.7
+   "yes": 0.9,
+   "no": 0.1
   },
   "purpose": {
    "transcript[0]": 0.9,

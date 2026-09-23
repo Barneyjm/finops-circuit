@@ -4,37 +4,67 @@ from pathlib import Path
 
 import pytest
 
-from finops import analyze, build_circuit, report
+from finops import TAG_KEYS, analyze, app_ids, build_circuit, report
 from finops.backends import FakeBackend
 from finops.conversations import from_wildchat, load, transcript
 from finops.pricing import cost, price_of
 
 SAMPLES = {c["id"]: c for c in load(Path(__file__).resolve().parents[1] / "samples")}
+APPS = app_ids(list(SAMPLES.values()))
 V2 = build_circuit(v2=True)
 
 
 def run(cid, circuit=V2):
-    return analyze(SAMPLES[cid], FakeBackend(), circuit=circuit)
+    return analyze(SAMPLES[cid], FakeBackend(), circuit=circuit, app=APPS[cid])
 
 
-def test_a_simple_customer_reply_on_gpt4_is_a_downgrade():
-    f = run("01_support_reply")
-    assert f.value == "customer_facing" and f.business is True
-    assert any(a.startswith("downgrade") for a in f.actions) and 0 < f.savings_usd < f.cost.usd
+def test_every_conversation_gets_every_tag_key():
+    for cid in SAMPLES:
+        assert set(run(cid).tags) == set(TAG_KEYS), cid
 
 
-def test_hard_or_sensitive_work_is_not_downgraded():
-    assert not any(a.startswith("downgrade") for a in run("02_sql_debug").actions)  # a small model would not do
-    contract = run("09_contract_clause")
-    assert contract.business is True and not any(a.startswith("downgrade") for a in contract.actions)
-    assert any(a.startswith("hold") for a in contract.actions)  # sensitive: a person decides first
+def test_two_stage_task_then_subtask():
+    assert (run("02_sql_debug").tags["task"], run("02_sql_debug").tags["subtask"]) == ("code", "sql")
+    assert (run("01_support_reply").tags["task"], run("01_support_reply").tags["subtask"]) == ("writing", "email_message")
+    assert run("03_meeting_summary").tags == {**run("03_meeting_summary").tags, "task": "summarization", "subtask": "list_notes", "domain": "operations"}
 
 
-def test_non_business_spend_is_a_policy_question():
-    for cid in ("05_homework", "06_roleplay", "07_jailbreak", "08_test_ping"):
+def test_a_templated_program_is_one_app_and_people_are_adhoc():
+    apps = {APPS[c] for c in ("11_keyword_app", "12_keyword_app", "13_keyword_app")}
+    assert len(apps) == 1 and next(iter(apps)).startswith("app-")
+    assert APPS["01_support_reply"] == "adhoc"
+    f = run("11_keyword_app")
+    assert f.tags["workload"] == "automated" and f.tags["task"] == "extraction" and f.tags["subtask"] == "keywords"
+    assert any(a.startswith("downgrade") for a in f.actions) and any(a.startswith("cache") for a in f.actions)
+
+
+def test_an_unsure_tag_is_untagged_and_the_subtask_is_not_asked():
+    conv = dict(SAMPLES["02_sql_debug"])
+    flat = {k: 1 / 12 for k in conv["expected_answers"]["task"]}
+    conv["expected_answers"] = {**conv["expected_answers"], "task": flat}
+    f = analyze(conv, FakeBackend(), circuit=V2)
+    assert f.tags["task"] == "untagged" and f.tags["subtask"] == "untagged" and "subtask" not in f.audit["answers"]
+    assert any(a.startswith("review") for a in f.actions)
+
+
+def test_dev_test_traffic_and_non_business_spend():
+    ping = run("08_test_ping")
+    assert ping.tags["environment"] == "dev_test" and ping.business is False and any(a.startswith("policy") for a in ping.actions)
+    for cid in ("05_homework", "06_roleplay", "07_jailbreak"):
         f = run(cid)
-        assert f.business is False and any(a.startswith("policy") for a in f.actions), cid
-        assert f.savings_usd == pytest.approx(f.cost.usd)
+        assert f.business is False and f.savings_usd == pytest.approx(f.cost.usd), cid
+
+
+def test_sensitive_data_is_held_and_not_downgraded():
+    f = run("09_contract_clause")
+    assert f.tags["data_class"] == "confidential" and any(a.startswith("hold") for a in f.actions)
+    assert not any(a.startswith("downgrade") for a in f.actions)
+
+
+def test_a_simple_task_on_a_premium_model_is_a_downgrade():
+    f = run("01_support_reply")
+    assert any(a.startswith("downgrade") for a in f.actions) and 0 < f.savings_usd < f.cost.usd
+    assert not any(a.startswith("downgrade") for a in run("02_sql_debug").actions)  # a small model would not do
 
 
 def test_a_long_conversation_is_flagged_for_resending_its_history():
@@ -54,17 +84,20 @@ def test_cost_resends_the_history_every_turn():
     assert price_of("gpt-4o-mini-2024-07-18") == (0.15, 0.60) and price_of("gpt-4o-2024-05-13") == (5.00, 15.00)
 
 
-def test_report_adds_up():
+def test_report_groups_spend_by_any_tags_and_measures_coverage():
     findings = [run(cid) for cid in SAMPLES]
-    r = report(findings)
-    assert r["conversations"] == 10 and r["spend_usd"] == pytest.approx(sum(f.cost.usd for f in findings), abs=1e-4)
-    assert sum(v["usd"] for v in r["by_value"].values()) == pytest.approx(r["spend_usd"], abs=1e-3)
-    assert set(r["savings_usd"]) <= {"policy", "downgrade"} and 0 < r["savings_share"] < 1
+    r = report(findings, by=("task", "subtask"))
+    assert r["conversations"] == 13 and r["spend_usd"] == pytest.approx(sum(f.cost.usd for f in findings), abs=1e-4)
+    assert sum(g["usd"] for g in r["groups"].values()) == pytest.approx(r["spend_usd"], abs=1e-3)
+    assert "code / sql" in r["groups"] and r["tag_coverage"]["task"] == 1.0 and r["fully_tagged_share"] == 1.0
+    by_app = report(findings, by=("app",))
+    assert any(k.startswith("app-") and v["conversations"] == 3 for k, v in by_app["groups"].items())
+    assert 0 < r["savings_share"] < 1
 
 
 def test_v1_backends_get_no_v2_questions():
     f = run("01_support_reply", circuit=build_circuit())
-    assert "functions" not in f.audit["answers"] and f.value == "customer_facing"
+    assert "purpose" not in f.audit["answers"] and f.tags["task"] == "writing"
 
 
 def test_wildchat_rows_keep_only_what_a_cost_review_needs():
@@ -87,3 +120,18 @@ def test_wildchat_rows_keep_only_what_a_cost_review_needs():
 def test_transcript_keeps_both_ends_of_a_long_message():
     lines = transcript({"turns": [{"role": "user", "content": "start " + "x" * 2000 + " end"}]})
     assert lines[0].startswith("user: start") and lines[0].endswith("end") and "[...]" in lines[0]
+
+
+def test_the_same_message_repeated_is_not_an_app():
+    hello = {"model": "gpt-4o-mini", "turns": [{"role": "user", "content": "hello! how are you today?"}, {"role": "assistant", "content": "Hi!"}]}
+    convs = [{**hello, "id": f"h{i}"} for i in range(5)]
+    assert set(app_ids(convs).values()) == {"adhoc"}
+
+
+def test_declared_tags_win_and_the_circuit_fills_the_gaps():
+    conv = {**SAMPLES["02_sql_debug"], "tags": {"environment": "dev_test", "app": "billing-service"}}
+    f = analyze(conv, FakeBackend(), circuit=V2, app="adhoc")
+    assert f.tags["environment"] == "dev_test" and f.tags["app"] == "billing-service"
+    assert f.tag_source["environment"] == "declared" and f.tag_source["task"] == "inferred" and f.tags["task"] == "code"
+    r = report([f])
+    assert r["declared_share"]["environment"] == 1.0 and r["declared_share"]["task"] == 0.0

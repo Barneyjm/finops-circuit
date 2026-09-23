@@ -1,115 +1,120 @@
 # finops-circuit
 
-An LLM FinOps agent built on [decision circuits](https://github.com/Barneyjm/decision-circuits).
-Each conversation comes in with its model and tokens; one request asks a decision model six
-typed questions about it; a circuit, plain code, turns the probabilities into a value bucket
-and the actions a cost review recommends; the report adds it up.
+Tag LLM spend the way cloud spend is tagged, then say what to change. Built on
+[decision circuits](https://github.com/Barneyjm/decision-circuits).
+
+Each conversation gets allocation tags, `app`, `workload`, `environment`, `task` and `subtask`,
+`domain`, `data_class`, and a cost line from its tokens. A decision model answers the tag
+questions with probabilities; plain code turns them into tags, a tag it is not sure of comes
+out `untagged`, and the report groups spend by any tags the way a cloud bill is grouped.
 
 ```
-$ finops analyze samples/01_support_reply.json --backend fake
+$ finops analyze samples --backend fake
 
-== 01_support_reply.json  gpt-4-0613, 1 replies, $0.0053  (49 in / 64 out)
-   A customer says their order #88231 arrived with a cracked screen and wants a replacement before Friday. Write
--> value=customer_facing business=True saves $0.0053
-   value_type customer_facing 0.85 | work 0.95 | small model ok 0.90 | repeatable 0.80 | sensitive 0.15
+== 11_keyword_app.json  gpt-4o-2024-08-06, 1 replies, $0.0003  (44 in / 20 out)
+   Provide only relevant keywords to facilitate an online search for the product below. Return a comma-separated
+-> app=app-fb9384 workload=automated environment=production task=extraction subtask=keywords domain=marketing_sales data_class=public
+   business=True saves $0.0003 | small model ok 0.95 | repeatable 0.90
    * downgrade to gpt-4o-mini
    * cache or template: a common request
-   value      decided   value_type -> customer_facing p=0.85 conf=0.63 (min 0.25)
-   business   decided   work p=0.95; gate _business_2 p=0.94; and under independence -> p=0.89
-   downgrade  decided   small_model_ok p=0.90; gate _downgrade_3 p=0.93; and under independence -> p=0.84
+   task         decided   task -> extraction p=0.85 conf=0.69 (min 0.2)
+   subtask      decided   subtask -> keywords p=0.85 conf=0.58 (min 0.2)
 ```
-
-The model classifies. It never prices anything and never writes the report: cost is tokens
-times a price table, and every action is a gate over the model's probabilities.
 
 ## Run it
 
 ```bash
 git clone https://github.com/Barneyjm/finops-circuit && cd finops-circuit
 uv sync
-cp .env.example .env                              # one key for the backend you pick
-uv run finops fetch --n 200                       # a WildChat-4.8M sample into data/
-uv run finops report data/wildchat.jsonl --backend jev
+cp .env.example .env                                   # one key for the backend you pick
+uv run finops fetch --n 200                            # a WildChat-4.8M sample into data/
+uv run finops report data/wildchat.jsonl --backend jev --by task,subtask
 ```
 
 | | |
 |---|---|
 | `finops fetch --n N` | N real conversations from WildChat-4.8M into `data/wildchat.jsonl` |
-| `finops analyze <file>` | one conversation or a directory: cost, value, actions, the gate traces |
-| `finops report <file>` | the review: spend by value bucket, business share, actions, savings |
+| `finops analyze <file or dir>` | per conversation: tags, cost, actions, the gate traces |
+| `finops report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
 | `finops diagram` | the circuit as Mermaid |
 
-`--json` prints full findings with the audit record. `--backend` picks the model, as in
-[call-center-circuit](https://github.com/Barneyjm/call-center-circuit): `jev`, `circuits`,
-`local`, `semif`, `openai`, `anthropic`, or `fake` (the hand-written answers in `samples/`,
-no network).
+`--backend` picks the model, as in [call-center-circuit](https://github.com/Barneyjm/call-center-circuit):
+`jev`, `circuits`, `local`, `semif`, `openai`, `anthropic`, or `fake` (hand-written answers in
+`samples/`, no network).
 
-## What the circuit asks
+## The tags
 
-| question | type | used for |
+| tag | set by | values |
 |---|---|---|
-| `value_type` | choice of 6 | the bucket spend is reported under: customer-facing, internal productivity, engineering, research, personal, waste |
-| `work` | yes/no | business spend or not, checked against the bucket |
-| `complexity` | score, 4 levels | never recommend a cheaper model for hard work |
-| `small_model_ok` | yes/no | the downgrade candidate |
-| `repeatable` | yes/no | a common request: cache it or template it |
-| `sensitive` | yes/no | personal or confidential data: a person decides before anything moves |
+| `app` | code: the prompt template (below) | `app-<hex>`, or `adhoc` for people typing |
+| `workload` | the circuit | `interactive`, `automated` |
+| `environment` | the circuit | `production`, `dev_test` |
+| `task` | the circuit, stage one | code, writing, summarization, translation, extraction, classification, data_analysis, research, advice, creative, chit_chat, other |
+| `subtask` | the circuit, stage two | that task's kinds only: code → generate, debug, explain, review, convert, sql; writing → email_message, marketing_copy, social_post, document, rewrite, job_application; ... |
+| `domain` | the circuit | software, marketing_sales, customer_support, finance, legal, hr_people, education, health, operations, science_engineering, media_entertainment, personal_life, other |
+| `data_class` | the circuit | public, internal, confidential, regulated |
 
-With a circuit v2 model (`circuits`, `local`) two more go out: `functions` (multi: every
-business function served) and `purpose` (locate: the line that shows what it was for).
+**Two stages.** The first request asks every tag question at once; a second asks only the
+subtasks of the task the first one tagged, so "which kind of code work" is never asked of a
+poem. A tag below the confidence floor is `untagged`, never guessed, and the report gives tag
+coverage as the share of spend each tag covers.
 
-The gates, in `finops/circuit.py`:
+**Apps come from code.** A program wraps each input in the same fixed instructions, so its
+conversations open with the same words. The opening of the first message with numbers,
+quotes, links and addresses blanked is the template key; a key three or more conversations
+open with, going on to say different things, is one app. The same message sent many times
+("hello! how are you today?") is a repeated request, not a program.
 
-```python
-c.gate("value", argmax("value_type", min_confidence=0.25), on_uncertain="escalate")
-c.gate("business", (Q("work") & ~(Q("value_type")["personal"] | Q("value_type")["waste"])) >= 0.5, band=0.1, on_uncertain="escalate")
-c.gate("downgrade", (Q("small_model_ok") & ~Q("complexity")[3]) >= 0.65, band=0.1, on_uncertain="default", default=False)
-c.gate("cache", Q("repeatable") >= 0.7, band=0.1, on_uncertain="default", default=False)
-c.gate("policy", (Q("value_type")["waste"] | (Q("value_type")["personal"] & ~Q("work"))) >= 0.6, band=0.1, on_uncertain="default", default=False)
-c.gate("hold", Q("sensitive") >= 0.5, band=0.15, on_uncertain="default", default=True)
-```
+**Declared tags win.** A conversation that carries tags from its own metadata (`"tags":
+{"environment": "dev_test", "app": "billing-service"}`, from an API key, a project, a header)
+keeps them; the circuit fills the gaps, and `tag_source` says which is which. Environment
+especially belongs in metadata: whether traffic is a test is rarely in its text.
 
-And the actions, in `finops/agent.py`: **policy** (spend with no business use; saves all of
-it), **downgrade** to a small model (saves the price difference; never for hard or sensitive
-work, never when the model is already small), **cache or template** (no dollar figure: it
-depends on how often the request repeats), **hold** (sensitive data), **trim context** (six
-or more replies where resending earlier turns is a third of the bill or more), **review**
-(the circuit was not sure what it was for).
+## What the report recommends
 
-## Cost
+Gates over the same answers (`finops/circuit.py`), actions in code (`finops/agent.py`):
 
-A chat API is sent the whole conversation on every turn, so a reply's input is everything
-before it; a long conversation costs roughly the square of its length. Output tokens come from
-the data (WildChat records them per reply); input tokens are estimated at four characters a
-token. `finops/pricing.py` holds list prices per model at release; edit it for your contracts.
+| action | when | saves |
+|---|---|---|
+| policy | not business use | all of it |
+| dev/test on a premium model | environment is dev_test and the model is not small | the difference to gpt-4o-mini |
+| downgrade | a small model would do and the work is not hard | the difference to gpt-4o-mini |
+| cache or template | many people make the same request | no dollar figure: depends on repeats |
+| hold | confidential or regulated data | nothing moves models or gets cached without a person |
+| trim context | six or more replies, resent history a third of the bill or more | |
+| review | the task could not be tagged, or business use is unsure | |
+
+Cost: a chat API is sent the whole conversation every turn, so a reply's input is everything
+before it and a long conversation costs roughly the square of its length. Output tokens come
+from the data; input tokens are estimated at four characters a token. `finops/pricing.py`
+holds list prices per model; edit it for your contracts.
 
 ## One hundred real conversations
 
-`finops report` on 100 WildChat conversations (8 models, from gpt-3.5-turbo to o1-preview,
-half of them not in English):
+`finops report` on 100 WildChat conversations (8 models from gpt-3.5-turbo to o1-preview,
+half not in English), tagged by Jev:
 
-| | Jev (jev-1.13) | circuit-1.7b v2.0 |
-|---|---|---|
-| classified | 99 | 21 (79 to review) |
-| business share of spend | 18% | 11% |
-| largest bucket | personal, 51% of spend | |
-| downgrade / policy / cache flagged | 21 / 38 / 20 | 0 / 0 / 0 |
-| savings from the actions with a dollar figure | 56% of spend | |
+| | |
+|---|---|
+| tag coverage (share of spend) | task, subtask, domain, data_class 100%; workload 78%; environment 56% |
+| apps found | 4, among them a paraphrasing tool, a SQL optimizer and a JSON translation job; 88 conversations adhoc |
+| largest single line | one data-analysis conversation on o1-preview: 43% of all spend |
+| business share of spend | 20% |
+| actions | 71 policy, 18 cache, 6 downgrade, 8 dev/test on a premium model, 7 hold, 3 trim context, 11 review |
 
-Jev answers this question confidently and, read by hand, mostly right. circuit-1.7b v2.0 was
-never trained on it: its answers are spread thin, the `value` gate sends them to review
-rather than guess, and where the two disagree Jev is usually the better read. That is the
-circuit doing its job (unsure goes to a person) and a clear training target for the open
-model. Swapping the backend is one flag; the policy does not change.
+Environment is the weak tag, as it would be in any bill with no metadata: whether a
+conversation is a test is rarely in what it says. Declare it where the traffic comes from and
+the circuit only tags what it can read. circuit-1.7b v2.0 was never trained on this taxonomy
+and leaves most of it untagged; Jev tags it confidently. Swapping the backend is one flag.
 
 ## Data
 
-[WildChat-4.8M](https://huggingface.co/datasets/allenai/WildChat-4.8M) (AI2, ODC-BY):
-real conversations with ChatGPT models. `finops fetch` samples it through Hugging Face's
-datasets server and keeps only the model, the language and the turns with their token
-counts. The country, state, hashed IP and browser headers WildChat records are dropped
-before anything is written. `data/` is not committed. The ten conversations in `samples/`
-are written for the tests and carry hand-written answers; none come from WildChat.
+[WildChat-4.8M](https://huggingface.co/datasets/allenai/WildChat-4.8M) (AI2, ODC-BY): real
+conversations with ChatGPT models. `finops fetch` samples it through Hugging Face's datasets
+server and keeps only the model, the language and the turns with their token counts; the
+country, state, hashed IP and browser headers WildChat records are dropped before anything is
+written. `data/` is not committed. The conversations in `samples/` are written for the tests
+and carry hand-written answers; none come from WildChat.
 
 ## License
 
