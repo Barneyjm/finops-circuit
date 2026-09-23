@@ -7,27 +7,38 @@ tokens are priced at the cache rate. Where it does not, output tokens come from 
 `tokens` (WildChat records them) or its length, input tokens are the history before the reply,
 nothing is cached, and the counts are marked as estimated.
 
-The history resent on each turn is exactly what a provider's prompt cache serves, so the
-tokens resent at full price are also what turning caching on would bill at the cached rate:
-`caching_savings_usd` is that difference, for models that have a cache price.
+The history resent on each turn is exactly what a provider's prompt cache serves: `resent_tokens`
+are those sent again at full price, which `Price.cache_savings` prices at the cache rate instead.
+Counting (`cost`) and billing (`bill`) are separate, so saved counts can be billed again under a
+new table without the conversation.
 """
 
 from __future__ import annotations
 
+import functools
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 CHARS_PER_TOKEN = 4
 DEFAULT_PRICES = Path(__file__).with_name("prices.toml")
 
 
-@dataclass
+@dataclass(frozen=True)
 class Price:
     input: float  # per million tokens
     output: float
     cached_input: float | None = None  # None: no prompt cache for this model
     discount: float = 0.0  # contracted discount off list, 0 to 1
+
+    @property
+    def cached(self) -> float:
+        """What a cached input token bills at: the cache price, or full price without a cache."""
+        return self.input if self.cached_input is None else self.cached_input
+
+    def cache_savings(self, tokens: int) -> float:
+        """What serving `tokens` of input from a prompt cache would take off the list price."""
+        return tokens * (self.input - self.cached) / 1e6
 
 
 @dataclass
@@ -35,12 +46,16 @@ class PriceTable:
     models: dict[str, Price]
     currency: str = "USD"
     small_model: str = "gpt-4o-mini"
+    _hits: dict[str, Price] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def of(self, model: str) -> Price:
-        for prefix in sorted(self.models, key=len, reverse=True):
-            if model.startswith(prefix):
-                return self.models[prefix]
-        raise KeyError(f"no price for model {model!r}; add it to the price table")
+        """The price of the longest key `model` starts with."""
+        if model not in self._hits:
+            prefix = max((k for k in self.models if model.startswith(k)), key=len, default=None)
+            if prefix is None:
+                raise KeyError(f"no price for model {model!r}; add it to the price table")
+            self._hits[model] = self.models[prefix]
+        return self._hits[model]
 
 
 def load_prices(path: str | Path | None = None) -> PriceTable:
@@ -57,20 +72,9 @@ def load_prices(path: str | Path | None = None) -> PriceTable:
     return table
 
 
-_DEFAULT: PriceTable | None = None
-
-
+@functools.cache
 def default_prices() -> PriceTable:
-    global _DEFAULT
-    if _DEFAULT is None:
-        _DEFAULT = load_prices()
-    return _DEFAULT
-
-
-def price_of(model: str, prices: PriceTable | None = None) -> tuple[float, float]:
-    """(input, output) list price per million tokens."""
-    p = (prices or default_prices()).of(model)
-    return p.input, p.output
+    return load_prices()
 
 
 def tokens(text: str) -> int:
@@ -81,31 +85,46 @@ def tokens(text: str) -> int:
 class Cost:
     model: str
     input_tokens: int  # all input, cached included
-    cached_tokens: int  # of input, read from the provider's cache
     output_tokens: int
-    input_measured: bool  # the log recorded input and cache counts; otherwise estimated
-    output_measured: int  # of output_tokens, how many the log recorded rather than estimated
-    usd: float  # at list prices
-    contracted_usd: float  # after the contract discount
-    usd_on_small_model: float  # the same tokens at the small model's prices
-    resent_usd: float  # what sending earlier turns again cost at full price
-    resent_tokens: int  # those tokens: history resent and not served from a cache
-    caching_savings_usd: float  # what prompt caching would take off resent_usd (0 without a cache price)
+    output_measured: int = 0  # of output_tokens, how many the log recorded rather than estimated
+    cached_tokens: int = 0  # of input, read from the provider's cache
+    input_measured: bool = False  # the log recorded input and cache counts; otherwise estimated
+    resent_tokens: int = 0  # history sent again at full price: what a prompt cache would serve
+    usd: float = 0.0  # at list prices
+    contracted_usd: float = 0.0  # after the contract discount
+    usd_on_small_model: float = 0.0  # the same tokens at the small model's prices
+    resent_usd: float = 0.0  # what resent_tokens cost
+    input_usd: float = 0.0  # usd split by charge, as FOCUS bills it: full-price input,
+    cached_usd: float = 0.0  # cached input,
+    output_usd: float = 0.0  # and output
     currency: str = "USD"
-    input_usd: float = field(default=0.0)
-    cached_usd: float = field(default=0.0)
-    output_usd: float = field(default=0.0)
+
+
+def bill(c: Cost, table: PriceTable) -> Cost:
+    """`c`'s token counts at `table`'s prices: every dollar field again, the counts as they are."""
+    p, s = table.of(c.model), table.of(table.small_model)
+    full_in = c.input_tokens - c.cached_tokens
+    input_usd, cached_usd, output_usd = full_in * p.input / 1e6, c.cached_tokens * p.cached / 1e6, c.output_tokens * p.output / 1e6
+    usd = input_usd + cached_usd + output_usd
+    return replace(
+        c,
+        usd=usd,
+        contracted_usd=usd * (1 - p.discount),
+        usd_on_small_model=(full_in * s.input + c.cached_tokens * s.cached + c.output_tokens * s.output) / 1e6,
+        resent_usd=c.resent_tokens * p.input / 1e6,
+        input_usd=input_usd,
+        cached_usd=cached_usd,
+        output_usd=output_usd,
+        currency=table.currency,
+    )
 
 
 def cost(model: str, turns: list[dict], prices: PriceTable | None = None) -> Cost:
     """`turns`: [{"role", "content", "tokens"?, "usage"?}], in order. An assistant turn's
     `usage` ({"input_tokens", "output_tokens", "cached_tokens"}) is the provider's own count."""
-    table = prices or default_prices()
-    p, s = table.of(model), table.of(table.small_model)
     history = sent = 0  # sent: tokens already sent once as input
-    total_in = cached = total_out = measured_out = resent = 0
+    total_in = cached = total_out = measured_out = resent = replies = 0
     measured_in = True
-    replies = 0
     for t in turns:
         n = t.get("tokens") or tokens(t["content"])
         if t["role"] == "assistant":
@@ -124,29 +143,5 @@ def cost(model: str, turns: list[dict], prices: PriceTable | None = None) -> Cos
             measured_out += out if ("output_tokens" in u or t.get("tokens")) else 0
             n = out
         history += n
-    full_in = total_in - cached
-    cached_price = p.cached_input if p.cached_input is not None else p.input
-    input_usd, cached_usd, output_usd = full_in * p.input / 1e6, cached * cached_price / 1e6, total_out * p.output / 1e6
-    usd = input_usd + cached_usd + output_usd
-    s_cached = s.cached_input if s.cached_input is not None else s.input
-    small = (full_in * s.input + cached * s_cached + total_out * s.output) / 1e6
-    uncached_resent = max(0, resent - cached)  # history the cache could have served but did not
-    savings = uncached_resent * (p.input - p.cached_input) / 1e6 if p.cached_input is not None else 0.0
-    return Cost(
-        model,
-        total_in,
-        cached,
-        total_out,
-        measured_in and replies > 0,
-        measured_out,
-        usd,
-        usd * (1 - p.discount),
-        small,
-        uncached_resent * p.input / 1e6,
-        uncached_resent,
-        savings,
-        table.currency,
-        input_usd,
-        cached_usd,
-        output_usd,
-    )
+    counts = Cost(model, total_in, total_out, measured_out, cached, measured_in and replies > 0, max(0, resent - cached))
+    return bill(counts, prices or default_prices())

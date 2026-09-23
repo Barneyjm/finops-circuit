@@ -9,8 +9,9 @@ The mapping:
     ChargeCategory "Usage", ChargeClass null, ChargeFrequency "Usage-Based", PricingCategory "Standard"
     ConsumedQuantity / ConsumedUnit        tokens / "Tokens"
     PricingQuantity / PricingUnit          tokens / 1e6 / "1000000 Tokens"
-    ListUnitPrice, ContractedUnitPrice     the price table's list price, and after its contract discount
-    ListCost; ContractedCost = EffectiveCost = BilledCost    list, then after the discount (prices.toml)
+    ListUnitPrice, ContractedUnitPrice     the saved cost's price per million, list and after the discount
+    ListCost; ContractedCost = EffectiveCost = BilledCost    list, then after the discount, as the
+                                           finding was billed (`finops reprice` to change prices)
     ChargePeriodStart/End                  the hour of the conversation; BillingPeriod its month
     ResourceId / ResourceName / ResourceType   the conversation / its app / "Conversation"
     SkuId, SkuPriceId, SkuMeter            "<model>/input-tokens" and so on
@@ -27,16 +28,15 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import asdict
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .agent import NOT_APPLICABLE, Finding
 from .circuit import UNTAGGED
-from .pricing import PriceTable, default_prices
 
 TAG_PREFIX = "finops-circuit/"
-NOT_APPLICABLE = "n/a"
 
 COLUMNS = [
     # mandatory in FOCUS 1.4
@@ -80,23 +80,19 @@ def _tags(tags: dict[str, str], source: dict[str, str]) -> str:
     return json.dumps(out, ensure_ascii=False, sort_keys=True)
 
 
-def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: str = "LLM usage", prices: PriceTable | None = None) -> list[dict[str, Any]]:
-    """FOCUS rows per finding: input tokens, cached input tokens (when there are any), output tokens."""
-    table = prices or default_prices()
-    out = []
+def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: str = "LLM usage") -> Iterator[dict[str, Any]]:
+    """FOCUS rows per finding: input tokens, cached input tokens (when there are any), output
+    tokens, billed as the finding's cost line split them, so the rows add up to its spend."""
     for f in findings:
-        d = asdict(f) if not isinstance(f, dict) else f
-        c, model = d["cost"], d["model"]
-        who = vendor(model)
-        price = table.of(model)
-        c_start, c_end, b_start, b_end = _periods(d.get("timestamp"))
-        source = d.get("tag_source") or {k: ("code" if k == "app" else "inferred") for k in d["tags"]}
-        currency = c.get("currency", table.currency)
+        f = f if isinstance(f, Finding) else Finding.from_dict(f)
+        c, who = f.cost, vendor(f.model)
+        c_start, c_end, b_start, b_end = _periods(f.timestamp)
+        discount = round(1 - c.contracted_usd / c.usd, 6) if c.usd else 0.0
         shared = {
             "BillingAccountId": account_id,
             "BillingAccountName": account_name,
-            "BillingCurrency": currency,
-            "PricingCurrency": currency,
+            "BillingCurrency": c.currency,
+            "PricingCurrency": c.currency,
             "BillingPeriodStart": b_start,
             "BillingPeriodEnd": b_end,
             "ChargePeriodStart": c_start,
@@ -111,54 +107,49 @@ def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: st
             "ServiceProviderName": who,
             "HostProviderName": who,
             "InvoiceIssuerName": who,
-            "ResourceId": d["id"],
-            "ResourceName": d["tags"].get("app", ""),
+            "ResourceId": f.id,
+            "ResourceName": f.tags.get("app", ""),
             "ResourceType": "Conversation",
             "PricingUnit": "1000000 Tokens",
             "ConsumedUnit": "Tokens",
-            "Tags": _tags(d["tags"], source),
-            "x_ConversationModel": model,
-            "x_TagSources": json.dumps(source, sort_keys=True),
-            "x_Actions": json.dumps(d["actions"], ensure_ascii=False),
-            "x_BusinessUse": "" if d["business"] is None else str(bool(d["business"])).lower(),
+            "Tags": _tags(f.tags, f.tag_source),
+            "x_ConversationModel": f.model,
+            "x_TagSources": json.dumps(f.tag_source, sort_keys=True),
+            "x_Actions": json.dumps([a.text for a in f.actions], ensure_ascii=False),
+            "x_BusinessUse": "" if f.business is None else str(bool(f.business)).lower(),
         }
-        cached = c.get("cached_tokens", 0)
-        input_measured = c.get("input_measured", False)
-        charges = [("input", c["input_tokens"] - cached, price.input, not input_measured)]
-        if cached:
-            charges.append(("cached-input", cached, price.cached_input if price.cached_input is not None else price.input, not input_measured))
-        charges.append(("output", c["output_tokens"], price.output, c["output_measured"] < c["output_tokens"]))
-        for i, (kind, tokens, unit, estimated) in enumerate(charges):
-            list_cost = tokens * unit / 1e6
-            contracted = list_cost * (1 - price.discount)
-            last = i == len(charges) - 1
-            out.append(
-                shared
-                | {
-                    "ChargeDescription": f"{model} {kind.replace('-', ' ')} tokens",
-                    "ConsumedQuantity": tokens,
-                    "PricingQuantity": tokens / 1e6,
-                    "ListUnitPrice": unit,
-                    "ContractedUnitPrice": unit * (1 - price.discount),
-                    "ListCost": list_cost,
-                    "ContractedCost": contracted,
-                    "EffectiveCost": contracted,
-                    "BilledCost": contracted,
-                    "SkuId": f"{model}/{kind}-tokens",
-                    "SkuPriceId": f"{model}/{kind}-tokens/list-{unit:g}" + (f"/discount-{price.discount:g}" if price.discount else ""),
-                    "SkuMeter": f"{kind.replace('-', ' ').title()} Tokens",
-                    "x_QuantityEstimated": str(estimated).lower(),
-                    # the conversation's potential savings sit on its last row, so they sum once
-                    "x_PotentialSavings": d["savings_usd"] if last else 0.0,
-                }
-            )
-    return out
+        charges = [("input", c.input_tokens - c.cached_tokens, c.input_usd, not c.input_measured)]
+        if c.cached_tokens:
+            charges.append(("cached-input", c.cached_tokens, c.cached_usd, not c.input_measured))
+        charges.append(("output", c.output_tokens, c.output_usd, c.output_measured < c.output_tokens))
+        for i, (kind, tokens, list_cost, estimated) in enumerate(charges):
+            unit = round(list_cost / tokens * 1e6, 6) if tokens else 0.0  # per million, as the table had it
+            contracted = list_cost * (1 - discount)
+            yield shared | {
+                "ChargeDescription": f"{f.model} {kind.replace('-', ' ')} tokens",
+                "ConsumedQuantity": tokens,
+                "PricingQuantity": tokens / 1e6,
+                "ListUnitPrice": unit,
+                "ContractedUnitPrice": unit * (1 - discount),
+                "ListCost": list_cost,
+                "ContractedCost": contracted,
+                "EffectiveCost": contracted,
+                "BilledCost": contracted,
+                "SkuId": f"{f.model}/{kind}-tokens",
+                "SkuPriceId": f"{f.model}/{kind}-tokens/list-{unit:g}" + (f"/discount-{discount:g}" if discount else ""),
+                "SkuMeter": f"{kind.replace('-', ' ').title()} Tokens",
+                "x_QuantityEstimated": str(estimated).lower(),
+                # the conversation's potential savings sit on its last row, so they sum once
+                "x_PotentialSavings": f.savings_usd if i == len(charges) - 1 else 0.0,
+            }
 
 
 def write_csv(findings: list[Any], path: str | Path, **kw: Any) -> int:
-    data = rows(findings, **kw)
+    n = 0
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=COLUMNS)
         w.writeheader()
-        w.writerows(data)
-    return len(data)
+        for row in rows(findings, **kw):
+            w.writerow(row)
+            n += 1
+    return n

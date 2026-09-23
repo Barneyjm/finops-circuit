@@ -223,7 +223,11 @@ discount = 0.15
 ```bash
 uv run finops report data/wildchat.jsonl --prices mine.toml --save data/findings.json
 uv run finops reprice data/findings.json --prices other.toml    # what-if, no model calls
+uv run finops focus data/findings.json --prices other.toml      # --prices on focus or html reprices on the fly
 ```
+
+Repricing bills the saved token counts again and decides the actions again from the saved
+gates: it needs neither the conversations nor the backend.
 
 Token counts come from the log where it has them. An assistant turn may carry the provider's
 own `usage`, as the OpenAI and Anthropic APIs return it:

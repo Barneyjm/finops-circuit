@@ -8,12 +8,16 @@ import pytest
 from finops import analyze, app_ids, build_circuit, load_taxonomy, report, tag_keys
 from finops.backends import FakeBackend
 from finops.conversations import from_wildchat, load, transcript
-from finops.pricing import cost, price_of
+from finops.pricing import cost, default_prices
 
 SAMPLES = {c["id"]: c for c in load(Path(__file__).resolve().parents[1] / "samples")}
 APPS = app_ids(list(SAMPLES.values()))
 TX = load_taxonomy()
 V2 = build_circuit(TX, v2=True)
+
+
+def has(f, key):
+    return any(a.key == key for a in f.actions)
 
 
 def run(cid, circuit=V2):
@@ -37,7 +41,7 @@ def test_a_templated_program_is_one_app_and_people_are_adhoc():
     assert APPS["01_support_reply"] == "adhoc"
     f = run("11_keyword_app")
     assert f.tags["workload"] == "automated" and f.tags["task"] == "extraction" and f.tags["subtask"] == "keywords"
-    assert any(a.startswith("downgrade") for a in f.actions) and any(a.startswith("cache") for a in f.actions)
+    assert has(f, "downgrade") and has(f, "cache or template")
 
 
 def test_an_unsure_tag_is_untagged_and_the_subtask_is_not_asked():
@@ -46,12 +50,12 @@ def test_an_unsure_tag_is_untagged_and_the_subtask_is_not_asked():
     conv["expected_answers"] = {**conv["expected_answers"], "task": flat}
     f = analyze(conv, FakeBackend(), circuit=V2)
     assert f.tags["task"] == "untagged" and f.tags["subtask"] == "untagged" and "subtask" not in f.audit["answers"]
-    assert any(a.startswith("review") for a in f.actions)
+    assert has(f, "review")
 
 
 def test_dev_test_traffic_and_non_business_spend():
     ping = run("08_test_ping")
-    assert ping.tags["environment"] == "dev_test" and ping.business is False and any(a.startswith("policy") for a in ping.actions)
+    assert ping.tags["environment"] == "dev_test" and ping.business is False and has(ping, "policy")
     for cid in ("05_homework", "06_roleplay", "07_jailbreak"):
         f = run(cid)
         assert f.business is False and f.savings_usd == pytest.approx(f.cost.usd), cid
@@ -59,21 +63,21 @@ def test_dev_test_traffic_and_non_business_spend():
 
 def test_sensitive_data_is_held_and_not_downgraded():
     f = run("09_contract_clause")
-    assert f.tags["data_class"] == "confidential" and any(a.startswith("hold") for a in f.actions)
-    assert not any(a.startswith("downgrade") for a in f.actions)
+    assert f.tags["data_class"] == "confidential" and has(f, "hold")
+    assert not has(f, "downgrade")
 
 
 def test_a_simple_task_on_a_premium_model_is_a_downgrade():
     f = run("01_support_reply")
-    assert any(a.startswith("downgrade") for a in f.actions) and 0 < f.savings_usd < f.cost.usd
-    assert not any(a.startswith("downgrade") for a in run("02_sql_debug").actions)  # a small model would not do
+    assert has(f, "downgrade") and 0 < f.savings_usd < f.cost.usd
+    assert not has(run("02_sql_debug"), "downgrade")  # a small model would not do
 
 
 def test_a_long_conversation_is_flagged_for_resending_its_history():
     f = run("10_long_code_session")
-    assert f.turns == 6 and any(a.startswith("trim context") for a in f.actions)
+    assert f.turns == 6 and has(f, "trim context")
     assert f.cost.resent_usd / f.cost.usd >= 1 / 3
-    assert not any(a.startswith("trim") for a in run("06_roleplay").actions)  # long too, but policy already covers it
+    assert not has(run("06_roleplay"), "trim context")  # long too, but policy already covers it
 
 
 def test_cost_resends_the_history_every_turn():
@@ -83,7 +87,8 @@ def test_cost_resends_the_history_every_turn():
     assert c.input_tokens == 100 + 250 and c.output_tokens == 100 and c.output_measured == 100
     assert c.resent_usd == pytest.approx(100 * 30 / 1e6)
     assert c.usd == pytest.approx(350 * 30 / 1e6 + 100 * 60 / 1e6)
-    assert price_of("gpt-4o-mini-2024-07-18") == (0.15, 0.60) and price_of("gpt-4o-2024-05-13") == (5.00, 15.00)
+    table = default_prices()
+    assert (table.of("gpt-4o-mini-2024-07-18").input, table.of("gpt-4o-2024-05-13").input, table.of("gpt-4o-2024-08-06").input) == (0.15, 5.00, 2.50)
 
 
 def test_report_groups_spend_by_any_tags_and_measures_coverage():
@@ -192,7 +197,7 @@ def test_a_custom_taxonomy_defines_its_own_tags_children_and_actions(tmp_path):
     }
     f = analyze(conv, FakeBackend(), taxonomy=tx, circuit=build_circuit(tx))
     assert f.tags == {"app": "adhoc", "team": "platform", "stage": "build", "risk": "high", "cost_center": "cc-4411"}
-    assert f.tag_source["cost_center"] == "declared" and any(a.startswith("hold: risk=high") for a in f.actions)
+    assert f.tag_source["cost_center"] == "declared" and any(a.text.startswith("hold: risk=high") for a in f.actions)
     growth = analyze({**conv, "expected_answers": {**conv["expected_answers"], "team": {"growth": 0.9, "platform": 0.1}}}, FakeBackend(), taxonomy=tx, circuit=build_circuit(tx))
     assert growth.tags["stage"] == "n/a"  # growth has no stages: not applicable, not untagged
 
@@ -208,7 +213,7 @@ def test_focus_rows_carry_the_mandatory_columns_and_add_up():
     from finops.focus import COLUMNS, rows
 
     findings = [run(cid) for cid in SAMPLES]
-    out = rows(findings)
+    out = list(rows(findings))
     assert len(out) == 2 * len(findings)
     mandatory = ["BilledCost", "BillingAccountId", "BillingCurrency", "ChargeCategory", "ChargePeriodStart", "EffectiveCost", "ListCost", "PricingUnit", "ServiceCategory", "ServiceProviderName"]
     assert all(r[k] not in (None, "") for r in out for k in mandatory) and set(out[0]) <= set(COLUMNS)
@@ -280,11 +285,11 @@ def test_a_long_conversation_on_a_model_with_a_prompt_cache_is_told_to_cache(tmp
     table = prices(tmp_path)
     conv = {**SAMPLES["10_long_code_session"], "model": "big"}
     f = analyze(conv, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=table)
-    assert any(a.startswith("prompt caching") for a in f.actions) and not any(a.startswith("trim") for a in f.actions)
-    assert f.action_savings["prompt caching"] == pytest.approx(f.cost.resent_tokens * (2.00 - 0.50) / 1e6)
-    assert f.savings_usd == pytest.approx(sum(f.action_savings.values())) and f.savings_usd < f.cost.usd
+    assert has(f, "prompt caching") and not has(f, "trim context")
+    assert next(a.usd for a in f.actions if a.key == "prompt caching") == pytest.approx(f.cost.resent_tokens * (2.00 - 0.50) / 1e6)
+    assert 0 < f.savings_usd < f.cost.usd
     nocache = analyze({**conv, "model": "big-nocache"}, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=table)
-    assert not any(a.startswith("prompt caching") for a in nocache.actions)  # no cache price: trim context is the fallback
+    assert not has(nocache, "prompt caching")  # no cache price: trim context is the fallback
 
 
 def test_focus_bills_cached_input_on_its_own_row_after_the_discount(tmp_path):
@@ -301,7 +306,7 @@ def test_focus_bills_cached_input_on_its_own_row_after_the_discount(tmp_path):
         ],
     }
     f = analyze(conv, FakeBackend(), circuit=V2, prices=table)
-    out = rows([f], prices=table)
+    out = list(rows([f]))
     assert [r["SkuId"] for r in out] == ["big/input-tokens", "big/cached-input-tokens", "big/output-tokens"]
     assert [r["ConsumedQuantity"] for r in out] == [3000 - 2048, 2048, 200]
     assert sum(r["ListCost"] for r in out) == pytest.approx(f.cost.usd)
@@ -318,9 +323,20 @@ def test_reprice_decides_again_from_the_saved_gates_without_the_model(tmp_path):
     conv = {**SAMPLES["10_long_code_session"], "model": "big"}
     old = prices(tmp_path, PRICES.replace("cached_input = 0.50\n", ""))  # the same table before "big" got a cache price
     before = analyze(conv, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=old)
-    assert not any(a.startswith("prompt caching") for a in before.actions)
+    assert not has(before, "prompt caching")
     table = prices(tmp_path)
     again = analyze(conv, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=table)
-    after = reprice(json.loads(json.dumps(asdict(before), default=str)), conv, prices=table)
-    assert after.cost == again.cost and after.actions == again.actions and after.action_savings == pytest.approx(again.action_savings)
+    after = reprice(json.loads(json.dumps(asdict(before), default=str)), prices=table)  # no conversation needed
+    assert after.cost == again.cost and after.actions == again.actions
     assert after.tags == before.tags and after.audit == json.loads(json.dumps(before.audit, default=str))
+
+
+def test_findings_saved_before_actions_had_keys_still_load():
+    from finops import Finding
+
+    old = {"id": "x", "model": "gpt-4-0613", "timestamp": None, "turns": 1, "tags": {"app": "adhoc", "task": "code"}, "business": True, "audit": {},
+           "cost": {"model": "gpt-4-0613", "input_tokens": 100, "cached_tokens": 0, "output_tokens": 50, "output_measured": 50, "usd": 0.006, "caching_savings_usd": 0.0},
+           "actions": ["downgrade to gpt-4o-mini", "cache or template: a common request"], "savings_usd": 0.005, "action_savings": {"downgrade": 0.005}}  # fmt: skip
+    f = Finding.from_dict(old)
+    assert [(a.key, a.usd) for a in f.actions] == [("downgrade", 0.005), ("cache or template", 0.0)] and f.savings_usd == 0.005
+    assert f.tag_source == {"app": "code", "task": "inferred"} and f.cost.input_usd == pytest.approx(100 * 30 / 1e6)  # billed once on load

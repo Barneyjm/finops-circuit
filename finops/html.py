@@ -12,42 +12,42 @@ and what people typed should not travel with it.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from datetime import date
 from typing import Any
 
+from .agent import Finding
 
-def _row(f: Any, text: str | None) -> dict[str, Any]:
-    d = asdict(f) if not isinstance(f, dict) else f
-    c = d["cost"]
-    gates = d.get("audit", {}).get("gates", {})
+
+def _row(f: Finding, i: int, text: str | None) -> dict[str, Any]:
+    c = f.cost
     return {
-        "id": d["id"][:12],
-        "model": d["model"],
-        "month": (d.get("timestamp") or "")[:7] or None,
-        "replies": d["turns"],
-        "usd": c["usd"],
-        "contracted": c.get("contracted_usd", c["usd"]),
-        "in": c["input_tokens"],
-        "cached": c.get("cached_tokens", 0),
-        "out": c["output_tokens"],
-        "measured": bool(c.get("input_measured")),
-        "tags": d["tags"],
-        "source": d.get("tag_source") or {k: ("code" if k == "app" else "inferred") for k in d["tags"]},
-        "business": d["business"],
-        "actions": d["actions"],
-        "savings": d["savings_usd"],
-        "act_save": d.get("action_savings") or {},
-        "gates": {k: {"value": g["value"], "outcome": g["outcome"], "trace": "; ".join(g.get("trace") or [])} for k, g in gates.items() if not k.startswith("_")},
+        "i": i,
+        "id": f.id[:12],
+        "model": f.model,
+        "month": (f.timestamp or "")[:7] or None,
+        "replies": f.turns,
+        "usd": c.usd,
+        "in": c.input_tokens,
+        "cached": c.cached_tokens,
+        "out": c.output_tokens,
+        "measured": c.input_measured,
+        "tags": f.tags,
+        "source": f.tag_source,
+        "business": f.business,
+        "actions": [{"k": a.key, "t": a.text, "usd": a.usd} for a in f.actions],
+        "savings": f.savings_usd,
+        "gates": {k: {"value": g["value"], "outcome": g["outcome"], "trace": "; ".join(g.get("trace") or [])} for k, g in f.audit.get("gates", {}).items() if not k.startswith("_")},
         **({"text": text} if text else {}),
     }
 
 
 def render(findings: list[Any], *, apps: dict[str, str] | None = None, backend: str = "", source: str = "", texts: dict[str, str] | None = None) -> str:
-    """The page body (title, style, markup, data, script), without the html/head/body wrapper."""
+    """The page body (title, style, markup, data, script), without the html/head/body wrapper.
+    `findings`: Finding objects or findings as `--save` wrote them."""
+    findings = [f if isinstance(f, Finding) else Finding.from_dict(f) for f in findings]
     data = {
-        "rows": [_row(f, (texts or {}).get(f["id"] if isinstance(f, dict) else f.id)) for f in findings],
-        "keys": list(dict.fromkeys(k for f in findings for k in (f["tags"] if isinstance(f, dict) else f.tags))),
+        "rows": [_row(f, i, (texts or {}).get(f.id)) for i, f in enumerate(findings)],
+        "keys": list(dict.fromkeys(k for f in findings for k in f.tags)),
         "extra_keys": ["model", "month"],  # grouping keys that are facts about the call, not tags
         "apps": apps or {},
         "backend": backend,
@@ -220,7 +220,6 @@ const axis = (x) => (x === 0 ? "$0" : x >= 1 ? "$" + x.toFixed(x % 1 ? 2 : 0) : 
 const fmt = (x) => x >= 1 ? "$" + x.toFixed(2) : x >= 0.01 ? "$" + x.toFixed(3) : "$" + x.toFixed(4);
 const pct = (x) => (total ? (100 * x / total) : 0).toFixed(x / total < 0.1 ? 1 : 0) + "%";
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const actHead = (a) => a.split(":")[0].split(" to ")[0];
 let filter = null;
 
 function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
@@ -228,12 +227,14 @@ function load(k) { try { return localStorage.getItem(k); } catch (e) { return nu
 
 // ---- statement
 (function () {
-  const saved = rows.reduce((s, r) => s + r.savings, 0);
-  const tagged = rows.filter((r) => !Object.values(r.tags).includes("untagged")).reduce((s, r) => s + r.usd, 0);
-  const biz = rows.filter((r) => r.business === true).reduce((s, r) => s + r.usd, 0);
+  let saved = 0, tagged = 0, biz = 0, tin = 0, tc = 0, tout = 0;
+  for (const r of rows) {
+    saved += r.savings; tin += r.in; tc += r.cached; tout += r.out;
+    if (!Object.values(r.tags).includes("untagged")) tagged += r.usd;
+    if (r.business === true) biz += r.usd;
+  }
   const ms = rows.map((r) => r.month).filter(Boolean).sort();
   const mon = (k) => new Date(k + "-01T00:00:00").toLocaleString("en", { month: "short", year: "numeric" });
-  const tin = rows.reduce((s, r) => s + r.in, 0), tc = rows.reduce((s, r) => s + r.cached, 0), tout = rows.reduce((s, r) => s + r.out, 0);
   const short = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
   const items = [["Spend", fmt(total)], ["Tokens", `${short(tin)} in${tc ? ", " + short(tc) + " cached" : ""}, ${short(tout)} out`, "txt"], ["Conversations", rows.length.toLocaleString("en")], ...(ms.length ? [["Period", mon(ms[0]) + " to " + mon(ms[ms.length - 1]), "txt"]] : []), ["Fully tagged", pct(tagged)], ["Business use", pct(biz)], ["Savings found", fmt(saved) + " (" + pct(saved) + ")", "good"]];
   document.getElementById("statement").innerHTML = items.map(([k, v, c]) => `<div><dt>${k}</dt><dd class="num ${c || ""}">${v}</dd></div>`).join("");
@@ -357,7 +358,7 @@ const ACT = { "policy": ["var(--crit)", "Spend with no business use"], "hold": [
   "trim context": ["var(--accent)", "Long conversation resending its history"], "review": ["var(--warn)", "Could not be tagged: a person reviews"] };
 (function () {
   const m = new Map();
-  for (const r of rows) r.actions.forEach((a, j) => { const h = actHead(a); const x = m.get(h) || { n: 0, save: 0 }; x.n++; x.save += r.act_save[h] || 0; m.set(h, x); });
+  for (const r of rows) for (const a of r.actions) { const x = m.get(a.k) || { n: 0, save: 0 }; x.n++; x.save += a.usd; m.set(a.k, x); }
   document.getElementById("actions").innerHTML = [...m.entries()].sort((a, b) => b[1].save - a[1].save || b[1].n - a[1].n).map(([h, x]) => {
     const [c, what] = ACT[h] || ["var(--muted)", h];
     return `<div class="act" style="--c:${c}"><span class="dot"></span><span><b>${esc(h)}</b> <span style="color:var(--muted)">${what}</span></span><span class="num">${x.n}${x.save ? ", " + fmt(x.save) : ""}</span></div>`;
@@ -370,10 +371,10 @@ function ledger() {
   const list = rows.filter((r) => !filter || keyOf(r) === filter).sort((a, b) => b.usd - a.usd);
   document.getElementById("filter").innerHTML = filter ? `<span>Showing <b>${esc(filter)}</b>: ${list.length} conversations</span><button id="clear">Show all</button>` : `<span>All ${list.length}, most expensive first</span>`;
   const clear = document.getElementById("clear"); if (clear) clear.onclick = () => { filter = null; draw(); };
-  document.querySelector("#ledger tbody").innerHTML = list.slice(0, 200).map((r, i) => `<tr class="conv" tabindex="0" data-i="${rows.indexOf(r)}">
+  document.querySelector("#ledger tbody").innerHTML = list.slice(0, 200).map((r, i) => `<tr class="conv" tabindex="0" data-i="${r.i}">
     <td class="fig">${esc(r.id)}</td><td>${esc(r.model)}</td><td class="n">${r.replies}</td><td class="n">${fmt(r.usd)}</td>
     <td>${DATA.keys.filter((k) => k !== "app" || r.tags.app !== "adhoc").map((k) => `<span class="chip ${r.tags[k] === "untagged" ? "untagged" : ""} ${r.source[k] === "declared" ? "declared" : ""}" title="${k} (${r.source[k]})">${esc(r.tags[k])}</span>`).join("")}</td>
-    <td>${r.actions.map((a) => `<span class="pill ${pillClass(actHead(a))}" title="${esc(a)}">${esc(actHead(a))}</span>`).join(" ")}</td></tr>`).join("");
+    <td>${r.actions.map((a) => `<span class="pill ${pillClass(a.k)}" title="${esc(a.t)}">${esc(a.k)}</span>`).join(" ")}</td></tr>`).join("");
   document.querySelectorAll("#ledger tr.conv").forEach((t) => { const open = () => toggle(t); t.onclick = open; t.onkeydown = (e) => { if (e.key === "Enter") open(); }; });
 }
 function toggle(tr) {
@@ -385,7 +386,7 @@ function toggle(tr) {
   d.innerHTML = `<td colspan="6"><div style="display:grid;gap:10px">
     ${r.text ? `<div>${esc(r.text)}</div>` : ""}
     <div class="fig">${r.in.toLocaleString()} tokens in${r.cached ? " (" + r.cached.toLocaleString() + " from cache)" : ""}, ${r.out.toLocaleString()} out${r.measured ? "" : ", input estimated"}. Business use: ${r.business === null ? "unsure" : r.business ? "yes" : "no"}.${r.savings ? " Saves " + fmt(r.savings) + "." : ""}</div>
-    <div>${r.actions.map((a) => esc(a)).join("<br>") || "No action."}</div>
+    <div>${r.actions.map((a) => esc(a.t)).join("<br>") || "No action."}</div>
     <div class="trace">${gates}</div></div></td>`;
   tr.after(d);
 }

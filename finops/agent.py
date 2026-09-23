@@ -14,9 +14,9 @@ from typing import Any
 
 from decision_circuits.types import answer_distributions
 
-from .circuit import UNTAGGED, Taxonomy, build_child_circuit, build_circuit, load_taxonomy
+from .circuit import UNTAGGED, Taxonomy, build_child_circuit, build_circuit, default_taxonomy
 from .conversations import transcript
-from .pricing import Cost, PriceTable, cost, default_prices
+from .pricing import Cost, PriceTable, bill, cost, default_prices
 from .tags import ADHOC
 
 NOT_APPLICABLE = "n/a"  # a child tag whose parent's value has no options for it
@@ -24,11 +24,24 @@ NOT_APPLICABLE = "n/a"  # a child tag whose parent's value has no options for it
 
 def tag_keys(taxonomy: Taxonomy | None = None) -> list[str]:
     """The tags every conversation gets: app, then the taxonomy's, in its order."""
-    return ["app", *(taxonomy or load_taxonomy()).tags]
+    return ["app", *(taxonomy or default_taxonomy()).tags]
+
+
+def tag_sources(keys: Any, declared: Any = ()) -> dict[str, str]:
+    """Where each tag came from: "declared" (the conversation's own metadata), "code" (app),
+    or "inferred" (the circuit)."""
+    return {k: ("declared" if k in declared else "code" if k == "app" else "inferred") for k in keys}
 
 
 CONTEXT_HEAVY_TURNS = 6  # a conversation this long, where resending earlier turns is this share of the bill,
 CONTEXT_HEAVY_SHARE = 1 / 3  # is flagged: a summary or a fresh thread would cost less
+
+
+@dataclass
+class Action:
+    key: str  # what the report and the dashboard group by: "downgrade", "hold", ...
+    text: str  # the recommendation as a person reads it
+    usd: float = 0.0  # what it would have saved on this conversation; 0 where it has no dollar figure
 
 
 @dataclass
@@ -41,16 +54,26 @@ class Finding:
     tags: dict[str, str]  # app, every taxonomy tag ("untagged" where the circuit was not sure), and any declared extras
     tag_source: dict[str, str]  # per key: "declared" (the conversation's own metadata), "inferred" (the circuit), "code" (app)
     business: bool | None  # None: not sure
-    actions: list[str]
-    savings_usd: float  # what the actions with a dollar figure would have saved on this conversation, together
-    action_savings: dict[str, float]  # the same, per action
+    actions: list[Action]
     audit: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def savings_usd(self) -> float:
+        """What the actions with a dollar figure would have saved on this conversation, together."""
+        return sum(a.usd for a in self.actions)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Finding:
-        """A finding as `--save` wrote it (extra keys such as first_message are ignored)."""
+        """A finding as `--save` wrote it, this version or an earlier one: fields it lacks take
+        their defaults and extra keys (first_message) are dropped, so readers see one format."""
+        cost_names = {f.name for f in fields(Cost)}
+        spend = Cost(**{k: v for k, v in d["cost"].items() if k in cost_names})
+        if "input_usd" not in d["cost"]:  # saved before costs were split by charge: bill the counts once
+            spend = bill(spend, default_prices())
+        per = d.get("action_savings") or {}
+        actions = [Action(**a) if isinstance(a, dict) else Action(_legacy_key(a), a, per.get(_legacy_key(a), 0.0)) for a in d["actions"]]
         names = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in names} | {"cost": Cost(**d["cost"]), "action_savings": d.get("action_savings", {})})
+        return cls(**{k: v for k, v in d.items() if k in names} | {"cost": spend, "actions": actions, "tag_source": d.get("tag_source") or tag_sources(d["tags"])})
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1, ensure_ascii=False)
@@ -73,7 +96,7 @@ def analyze(conv: dict[str, Any], backend: Any, *, model: str | None = None, cir
     header) win over inferred ones, as declared tags do on a cloud resource: the circuit fills
     the gaps, and declared tags the taxonomy does not know (team, cost_center) pass through.
     Environment in particular is rarely in the text and usually in the metadata."""
-    tx = taxonomy or load_taxonomy()
+    tx = taxonomy or default_taxonomy()
     c = circuit or build_circuit(tx)
     table = prices or default_prices()
     spend = cost(conv["model"], conv["turns"], table)
@@ -96,12 +119,12 @@ def analyze(conv: dict[str, Any], backend: Any, *, model: str | None = None, cir
         tags[t.name] = str(subs[-1]["gates"][t.name]["value"])
     order = [*tag_keys(tx), *(k for k in declared if k not in tx.tags and k != "app")]
     tags = {k: tags.get(k, UNTAGGED) for k in order}
-    source = {k: ("declared" if k in declared else "code" if k == "app" else "inferred") for k in order}
+    source = tag_sources(order, declared)
     ms = (time.perf_counter() - t0) * 1000
 
     business = bool(g["business"]["value"]) if g["business"]["outcome"] == "decided" else None
-    actions, saved = decide(conv, tags, declared, {k: v["value"] for k, v in g.items()}, business, spend, tx, table)
     replies = sum(1 for t in conv["turns"] if t["role"] == "assistant")
+    actions = decide(replies, tags, declared, {k: v["value"] for k, v in g.items()}, business, spend, tx, table)
 
     last = getattr(backend, "last_response", None) or {}
     answers = {k: _compact(v) for r in (out, *subs) for k, v in r["answers"].items()}
@@ -114,12 +137,10 @@ def analyze(conv: dict[str, Any], backend: Any, *, model: str | None = None, cir
         "answers": answers,
         "gates": gates,
     }
-    return Finding(conv["id"], conv["model"], conv.get("timestamp"), replies, spend, tags, source, business, actions, sum(saved.values()), saved, audit)
+    return Finding(conv["id"], conv["model"], conv.get("timestamp"), replies, spend, tags, source, business, actions, audit)
 
 
-def decide(
-    conv: dict[str, Any], tags: dict[str, str], declared: dict[str, str], g: dict[str, Any], business: bool | None, spend: Cost, tx: Taxonomy, table: PriceTable
-) -> tuple[list[str], dict[str, float]]:
+def decide(replies: int, tags: dict[str, str], declared: dict[str, str], g: dict[str, Any], business: bool | None, spend: Cost, tx: Taxonomy, table: PriceTable) -> list[Action]:
     """The actions and what each saves, from the tags, the gate values and the cost line. Code
     only: a saved finding's gates are enough to decide again under a new price table."""
 
@@ -135,54 +156,46 @@ def decide(
     hold = bool(triggered("hold")) if hold_on else bool(g.get("hold", False))
     dev_on = [k for k in tx.actions.get("dev_test", {}) if k in declared]
     dev_test = bool(triggered("dev_test")) if dev_on else bool(g.get("dev_test", False))
-    here, small = table.of(conv["model"]), table.of(table.small_model)
+    here, small = table.of(spend.model), table.of(table.small_model)
     premium = here.input > small.input
-    to_small = spend.usd - spend.usd_on_small_model
-    actions: list[str] = []
-    saved: dict[str, float] = {}
-    moved = False  # a cheaper model was recommended: caching is then priced on that model
+    actions: list[Action] = []
     if business is False:
-        actions.append("policy: spend with no business use")
-        saved["policy"] = spend.usd
-    elif dev_test and premium and not hold:
-        actions.append(f"dev/test on a premium model: use {table.small_model}")
-        saved["dev/test on a premium model"] = to_small
-        moved = True
-    elif g["downgrade"] and premium and not hold:
-        actions.append(f"downgrade to {table.small_model}")
-        saved["downgrade"] = to_small
-        moved = True
+        actions.append(Action("policy", "policy: spend with no business use", spend.usd))
+    elif premium and not hold and (dev_test or g["downgrade"]):
+        key, text = ("dev/test on a premium model", f"dev/test on a premium model: use {table.small_model}") if dev_test else ("downgrade", f"downgrade to {table.small_model}")
+        actions.append(Action(key, text, spend.usd - spend.usd_on_small_model))
     if business is not False and not hold:
-        on = small if moved else here
-        caching = spend.resent_tokens * (on.input - on.cached_input) / 1e6 if on.cached_input is not None else 0.0
+        caching = (small if actions else here).cache_savings(spend.resent_tokens)  # on the small model once moved there
         if caching > 0 and spend.usd and caching / spend.usd >= 0.1:
-            actions.append(f"prompt caching: {caching / spend.usd:.0%} of the cost is history the cache would serve")
-            saved["prompt caching"] = caching
+            actions.append(Action("prompt caching", f"prompt caching: {caching / spend.usd:.0%} of the cost is history the cache would serve", caching))
     if g["cache"] and not hold:
-        actions.append("cache or template: a common request")  # no dollar figure: it depends on how often it repeats
+        actions.append(Action("cache or template", "cache or template: a common request"))  # no dollar figure: it depends on how often it repeats
     if hold:
-        actions.append(f"hold: {triggered('hold') or 'sensitive data'}, a person decides before it moves models or is cached")
-    replies = sum(1 for t in conv["turns"] if t["role"] == "assistant")
-    no_cache = "prompt caching" not in saved and here.cached_input is None
+        actions.append(Action("hold", f"hold: {triggered('hold') or 'sensitive data'}, a person decides before it moves models or is cached"))
+    no_cache = here.cached_input is None and not any(a.key == "prompt caching" for a in actions)
     if business is not False and no_cache and replies >= CONTEXT_HEAVY_TURNS and spend.usd and spend.resent_usd / spend.usd >= CONTEXT_HEAVY_SHARE:
-        actions.append(f"trim context: {spend.resent_usd / spend.usd:.0%} of the cost is resending earlier turns, and this model has no prompt cache")
+        actions.append(Action("trim context", f"trim context: {spend.resent_usd / spend.usd:.0%} of the cost is resending earlier turns, and this model has no prompt cache"))
     primary = tx.top[0].name  # the taxonomy's first tag is the one a conversation must have
     if tags.get(primary) == UNTAGGED or business is None:
-        actions.append("review: the circuit could not tag what this was for")
-    return actions, saved
+        actions.append(Action("review", "review: the circuit could not tag what this was for"))
+    return actions
 
 
-def reprice(saved: dict[str, Any], conv: dict[str, Any], *, taxonomy: Taxonomy | None = None, prices: PriceTable | None = None) -> Finding:
-    """A saved finding (as `--save` writes it) under a new price table: the cost line and the
-    actions again, from the conversation and the gates the model already decided. No backend
-    call: change prices.toml and rerun."""
-    tx, table = taxonomy or load_taxonomy(), prices or default_prices()
-    spend = cost(conv["model"], conv["turns"], table)
-    tags = saved["tags"]
-    declared = {k: v for k, v in tags.items() if saved.get("tag_source", {}).get(k) == "declared"}
-    g = {k: v["value"] for k, v in saved["audit"]["gates"].items()}
-    actions, saved_usd = decide(conv, tags, declared, g, saved["business"], spend, tx, table)
-    return Finding.from_dict(saved | {"cost": asdict(spend), "actions": actions, "savings_usd": sum(saved_usd.values()), "action_savings": saved_usd})
+def reprice(saved: dict[str, Any], *, taxonomy: Taxonomy | None = None, prices: PriceTable | None = None) -> Finding:
+    """A saved finding (as `--save` writes it) under a new price table: its token counts billed
+    again, and the actions decided again from the gates the model already set. Needs neither the
+    conversation nor the backend: change prices.toml and rerun."""
+    tx, table = taxonomy or default_taxonomy(), prices or default_prices()
+    f = Finding.from_dict(saved)
+    f.cost = bill(f.cost, table)
+    declared = {k: v for k, v in f.tags.items() if f.tag_source.get(k) == "declared"}
+    f.actions = decide(f.turns, f.tags, declared, {k: v["value"] for k, v in f.audit["gates"].items()}, f.business, f.cost, tx, table)
+    return f
+
+
+def _legacy_key(text: str) -> str:
+    """An action's key from its text, for findings saved before actions carried one."""
+    return text.split(":")[0].split(" to ")[0]
 
 
 def _compact(a: dict[str, Any]) -> Any:
@@ -221,9 +234,9 @@ def report(findings: list[Finding], by: tuple[str, ...] | None = None, labels: d
     counts: dict[str, int] = defaultdict(int)
     for f in findings:
         for a in f.actions:
-            counts[a.split(":")[0].split(" to ")[0]] += 1
-        for k, v in f.action_savings.items():
-            savings[k] += v
+            counts[a.key] += 1
+            if a.usd:
+                savings[a.key] += a.usd
     out_tokens = sum(f.cost.output_tokens for f in findings)
     result = {
         "conversations": len(findings),

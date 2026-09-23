@@ -7,6 +7,7 @@ finops report data/wildchat.jsonl --backend jev --save data/findings.json
 finops html data/findings.json --out report.html        # the dashboard, one self-contained file
 finops focus data/findings.json --out focus.csv          # the same spend as a FOCUS 1.4 dataset
 finops reprice data/findings.json --prices my-prices.toml  # the saved findings under new prices, no model calls
+                                                        # (--prices on focus or html reprices on the fly)
 finops diagram                                          # the circuit as Mermaid
 """
 
@@ -63,42 +64,35 @@ def main(argv: list[str] | None = None) -> None:
         out.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in convs))
         print(f"wrote {len(convs)} conversations to {out} (WildChat-4.8M, ODC-BY: attribute AI2 when you publish from it)")
         return
-    if args.command == "focus":
+    if args.command in ("focus", "reprice", "html"):
         saved = json.loads(Path(args.path).read_text())
-        out = Path(args.out or "focus.csv")
-        n = write_csv(saved["findings"], out, account_id=args.account, account_name=args.account_name or args.account, prices=prices)
-        print(f"wrote {n} FOCUS 1.4 rows ({len(saved['findings'])} conversations: input, cached input when any, and output tokens) to {out}")
-        return
-    if args.command == "reprice":
-        saved = json.loads(Path(args.path).read_text())
-        convs = {c["id"]: c for c in load(saved["source"])}
-        missing = [r["id"] for r in saved["findings"] if r["id"] not in convs]
-        if missing:
-            raise SystemExit(f"{len(missing)} findings have no conversation in {saved['source']}; reprice needs the data they were analyzed from")
-        findings = [reprice(r, convs[r["id"]], taxonomy=taxonomy, prices=prices) for r in saved["findings"]]
-        by = tuple(k.strip() for k in (args.by or taxonomy.top[0].name).split(",") if k.strip())
-        print(json.dumps(report(findings, by, saved.get("apps")), indent=1))
-        out = Path(args.out or args.path)
-        rows = [asdict(f) | {"first_message": r.get("first_message", "")} for f, r in zip(findings, saved["findings"], strict=True)]
-        out.write_text(json.dumps(saved | {"findings": rows}, ensure_ascii=False, default=str))
-        print(f"repriced {len(rows)} findings into {out}", file=sys.stderr)
-        return
-    if args.command == "html":
-        saved = json.loads(Path(args.path).read_text())
-        texts = {r["id"]: r["first_message"] for r in saved["findings"] if r.get("first_message")} if args.with_text else None
-        body = render(saved["findings"], apps=saved.get("apps"), backend=saved.get("backend", ""), source=saved.get("source", ""), texts=texts)
-        out = Path(args.out or "report.html")
-        out.write_text(document(body))
-        print(f"wrote {out} ({len(saved['findings'])} conversations{', with their first messages' if texts else ''})")
+        findings = saved["findings"]
+        if args.prices or args.command == "reprice":  # bill the saved counts again; the model is not asked
+            findings = [reprice(r, taxonomy=taxonomy, prices=prices) for r in findings]
+        n = len(findings)
+        if args.command == "focus":
+            out = Path(args.out or "focus.csv")
+            rows = write_csv(findings, out, account_id=args.account, account_name=args.account_name or args.account)
+            print(f"wrote {rows} FOCUS 1.4 rows ({n} conversations: input, cached input when any, and output tokens) to {out}")
+        elif args.command == "reprice":
+            by = _by(args.by, taxonomy, {k for f in findings for k in f.tags})
+            print(json.dumps(report(findings, by, saved.get("apps")), indent=1))
+            out = Path(args.out or args.path)
+            rows = [_saved(f, r.get("first_message", "")) for f, r in zip(findings, saved["findings"], strict=True)]
+            out.write_text(json.dumps(saved | {"findings": rows}, ensure_ascii=False, default=str))
+            print(f"repriced {n} findings into {out}", file=sys.stderr)
+        else:
+            texts = {r["id"]: r["first_message"] for r in saved["findings"] if r.get("first_message")} if args.with_text else None
+            body = render(findings, apps=saved.get("apps"), backend=saved.get("backend", ""), source=saved.get("source", ""), texts=texts)
+            out = Path(args.out or "report.html")
+            out.write_text(document(body))
+            print(f"wrote {out} ({n} conversations{', with their first messages' if texts else ''})")
         return
 
     backend = pick_backend(args.backend, args.model)
     circuit = build_circuit(taxonomy, v2)
     convs = load(args.path)
-    by = tuple(k.strip() for k in (args.by or taxonomy.top[0].name).split(",") if k.strip())
-    known = set(tag_keys(taxonomy)) | {str(k) for c in convs for k in (c.get("tags") or {})}
-    if unknown := [k for k in by if k not in known]:
-        raise SystemExit(f"--by: unknown tag keys {unknown}; use {', '.join(sorted(known))}")
+    by = _by(args.by, taxonomy, {str(k) for c in convs for k in (c.get("tags") or {})})
     apps = app_ids(convs)  # a template shows only across conversations, so the whole set is fingerprinted first
 
     def one(conv):
@@ -122,11 +116,25 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(report(findings, by, app_labels(convs)), indent=1))
         if args.save:
             first = {c["id"]: next((t["content"] for t in c["turns"] if t["role"] == "user"), "")[:300] for c in convs}
-            rows = [asdict(f) | {"first_message": first.get(f.id, "")} for f in findings]
+            rows = [_saved(f, first.get(f.id, "")) for f in findings]
             payload = {"backend": getattr(backend, "model", args.backend), "source": args.path, "apps": app_labels(convs), "findings": rows}
             Path(args.save).parent.mkdir(parents=True, exist_ok=True)
             Path(args.save).write_text(json.dumps(payload, ensure_ascii=False, default=str))
             print(f"saved {len(rows)} findings to {args.save}", file=sys.stderr)
+
+
+def _by(arg: str | None, taxonomy, extra: set[str]) -> tuple[str, ...]:
+    """--by as tag keys, checked against the taxonomy's and any declared ones."""
+    by = tuple(k.strip() for k in (arg or taxonomy.top[0].name).split(",") if k.strip())
+    known = set(tag_keys(taxonomy)) | extra
+    if unknown := [k for k in by if k not in known]:
+        raise SystemExit(f"--by: unknown tag keys {unknown}; use {', '.join(sorted(known))}")
+    return by
+
+
+def _saved(f, first_message: str) -> dict:
+    """A finding as --save writes it: every field, the total savings for readers of the JSON, the first message."""
+    return asdict(f) | {"savings_usd": f.savings_usd, "first_message": first_message}
 
 
 def _line(conv, f) -> str:
@@ -139,7 +147,7 @@ def _line(conv, f) -> str:
         "-> " + " ".join(f"{k}={v}" for k, v in f.tags.items()),
         f"   business={f.business} saves ${f.savings_usd:.4f} | small model ok {a['small_model_ok']:.2f} | repeatable {a['repeatable']:.2f}",
     ]
-    lines += [f"   * {x}" for x in f.actions] or ["   * no action"]
+    lines += [f"   * {x.text}" for x in f.actions] or ["   * no action"]
     for gid in [*(k for k in f.tags if k != "app"), "downgrade"]:
         g = f.audit["gates"].get(gid)
         if g:

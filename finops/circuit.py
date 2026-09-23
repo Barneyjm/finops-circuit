@@ -11,6 +11,7 @@ text.
 
 from __future__ import annotations
 
+import functools
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -87,10 +88,16 @@ def load_taxonomy(path: str | Path | None = None) -> Taxonomy:
     return Taxonomy(tags, actions)
 
 
+@functools.cache
+def default_taxonomy() -> Taxonomy:
+    """`taxonomy.toml`, read once."""
+    return load_taxonomy()
+
+
 def build_circuit(taxonomy: Taxonomy | None = None, v2: bool = False) -> Circuit:
     """Stage one: every top-level tag and the cost questions. `v2` adds `purpose` (locate: the
     line that shows what the conversation was for) for circuit v2 models."""
-    tx = taxonomy or load_taxonomy()
+    tx = taxonomy or default_taxonomy()
     c = Circuit()
     for t in tx.top:
         c.choice(t.name, t.question, t.options)
