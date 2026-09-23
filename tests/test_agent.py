@@ -135,3 +135,15 @@ def test_declared_tags_win_and_the_circuit_fills_the_gaps():
     assert f.tag_source["environment"] == "declared" and f.tag_source["task"] == "inferred" and f.tags["task"] == "code"
     r = report([f])
     assert r["declared_share"]["environment"] == 1.0 and r["declared_share"]["task"] == 0.0
+
+
+def test_the_dashboard_carries_the_data_and_no_conversation_text_by_default():
+    from dataclasses import asdict
+
+    from finops.html import document, render
+
+    findings = [asdict(run(cid)) | {"first_message": SAMPLES[cid]["turns"][0]["content"]} for cid in SAMPLES]
+    body = render(findings)
+    assert "<title>LLM Spend Ledger</title>" in body and '"rows":' in body and "cracked screen" not in body
+    with_text = render(findings, texts={f["id"]: f["first_message"] for f in findings})
+    assert "cracked screen" in with_text and document(body).startswith("<!doctype html>")

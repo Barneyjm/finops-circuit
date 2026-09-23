@@ -36,6 +36,7 @@ uv run finops report data/wildchat.jsonl --backend jev --by task,subtask
 | `finops fetch --n N` | N real conversations from WildChat-4.8M into `data/wildchat.jsonl` |
 | `finops analyze <file or dir>` | per conversation: tags, cost, actions, the gate traces |
 | `finops report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
+| `finops report ... --save findings.json` then `finops html findings.json` | the dashboard: one self-contained HTML file (conversation text left out unless `--with-text`) |
 | `finops diagram` | the circuit as Mermaid |
 
 `--backend` picks the model, as in [call-center-circuit](https://github.com/Barneyjm/call-center-circuit):

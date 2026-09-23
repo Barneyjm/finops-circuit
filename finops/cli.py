@@ -3,6 +3,8 @@
 finops fetch --n 200                                   # a WildChat-4.8M sample into data/wildchat.jsonl
 finops analyze samples/02_sql_debug.json --backend jev          # one conversation: tags, cost, actions, reasons
 finops report data/wildchat.jsonl --backend jev --by task,subtask  # spend grouped by tags, coverage, savings
+finops report data/wildchat.jsonl --backend jev --save data/findings.json
+finops html data/findings.json --out report.html        # the dashboard, one self-contained file
 finops diagram                                          # the circuit as Mermaid
 """
 
@@ -11,24 +13,28 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from .agent import TAG_KEYS, analyze, report
 from .backends import BACKENDS, V2_BACKENDS, pick_backend
 from .circuit import build_circuit
 from .conversations import fetch_wildchat, load
+from .html import document, render
 from .tags import app_ids, app_labels
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="finops", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["fetch", "analyze", "report", "diagram"])
+    ap.add_argument("command", choices=["fetch", "analyze", "report", "html", "diagram"])
     ap.add_argument("path", nargs="?", default="samples")
     ap.add_argument("--backend", default="jev", help=", ".join(BACKENDS))
     ap.add_argument("--model", default=None)
     ap.add_argument("--n", type=int, default=200, help="fetch: how many conversations")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default="data/wildchat.jsonl")
+    ap.add_argument("--out", default=None, help="fetch: data/wildchat.jsonl; html: report.html")
+    ap.add_argument("--save", default=None, help="report: also write the findings (audit included) to this JSON file, for `finops html`")
+    ap.add_argument("--with-text", action="store_true", help="html: include each conversation's first message (left out by default)")
     ap.add_argument("--json", action="store_true", help="print full findings, audit included")
     ap.add_argument("--by", default="task", help=f"report: comma-separated tag keys to group spend by ({', '.join(TAG_KEYS)})")
     ap.add_argument("--v2", action=argparse.BooleanOptionalAction, default=None, help=f"ask the circuit v2 questions (default: on for {', '.join(V2_BACKENDS)})")
@@ -39,10 +45,19 @@ def main(argv: list[str] | None = None) -> None:
         print(build_circuit(v2).to_mermaid())
         return
     if args.command == "fetch":
+        out = Path(args.out or "data/wildchat.jsonl")
         convs = fetch_wildchat(args.n, args.seed)
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in convs))
-        print(f"wrote {len(convs)} conversations to {args.out} (WildChat-4.8M, ODC-BY: attribute AI2 when you publish from it)")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in convs))
+        print(f"wrote {len(convs)} conversations to {out} (WildChat-4.8M, ODC-BY: attribute AI2 when you publish from it)")
+        return
+    if args.command == "html":
+        saved = json.loads(Path(args.path).read_text())
+        texts = {r["id"]: r["first_message"] for r in saved["findings"] if r.get("first_message")} if args.with_text else None
+        body = render(saved["findings"], apps=saved.get("apps"), backend=saved.get("backend", ""), source=saved.get("source", ""), texts=texts)
+        out = Path(args.out or "report.html")
+        out.write_text(document(body))
+        print(f"wrote {out} ({len(saved['findings'])} conversations{', with their first messages' if texts else ''})")
         return
 
     backend = pick_backend(args.backend, args.model)
@@ -64,6 +79,13 @@ def main(argv: list[str] | None = None) -> None:
             print(f.to_json() if args.json else _line(conv, f))
     if args.command == "report":
         print(json.dumps(report(findings, by, app_labels(convs)), indent=1))
+        if args.save:
+            first = {c["id"]: next((t["content"] for t in c["turns"] if t["role"] == "user"), "")[:300] for c in convs}
+            rows = [asdict(f) | {"first_message": first.get(f.id, "")} for f in findings]
+            payload = {"backend": getattr(backend, "model", args.backend), "source": args.path, "apps": app_labels(convs), "findings": rows}
+            Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.save).write_text(json.dumps(payload, ensure_ascii=False, default=str))
+            print(f"saved {len(rows)} findings to {args.save}", file=sys.stderr)
 
 
 def _line(conv, f) -> str:
