@@ -1,0 +1,53 @@
+{
+ "id": "08_test_ping",
+ "model": "gpt-3.5-turbo-0301",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "test",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Hello! How can I help you today?",
+   "tokens": 9
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.03,
+   "internal_productivity": 0.03,
+   "engineering": 0.03,
+   "research": 0.03,
+   "personal": 0.03,
+   "waste": 0.85
+  },
+  "work": {
+   "yes": 0.1,
+   "no": 0.9
+  },
+  "complexity": {
+   "0": 0.8,
+   "1": 0.0667,
+   "2": 0.0667,
+   "3": 0.0667
+  },
+  "small_model_ok": {
+   "yes": 0.99,
+   "no": 0.01
+  },
+  "repeatable": {
+   "yes": 0.95,
+   "no": 0.05
+  },
+  "sensitive": {
+   "yes": 0.0,
+   "no": 1.0
+  },
+  "functions": {},
+  "purpose": {
+   "none": 0.8
+  }
+ }
+}

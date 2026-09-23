@@ -1,0 +1,54 @@
+{
+ "id": "05_homework",
+ "model": "gpt-4-0314",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "solve for x: 3x + 7 = 22, show steps its for my math homework",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Subtract 7 from both sides: 3x = 15. Divide both sides by 3: x = 5.",
+   "tokens": 25
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.02,
+   "internal_productivity": 0.02,
+   "engineering": 0.02,
+   "research": 0.02,
+   "personal": 0.9,
+   "waste": 0.02
+  },
+  "work": {
+   "yes": 0.03,
+   "no": 0.97
+  },
+  "complexity": {
+   "0": 0.8,
+   "1": 0.0667,
+   "2": 0.0667,
+   "3": 0.0667
+  },
+  "small_model_ok": {
+   "yes": 0.97,
+   "no": 0.03
+  },
+  "repeatable": {
+   "yes": 0.85,
+   "no": 0.15
+  },
+  "sensitive": {
+   "yes": 0.02,
+   "no": 0.98
+  },
+  "functions": {},
+  "purpose": {
+   "transcript[0]": 0.9,
+   "none": 0.05
+  }
+ }
+}

@@ -1,0 +1,56 @@
+{
+ "id": "01_support_reply",
+ "model": "gpt-4-0613",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "A customer says their order #88231 arrived with a cracked screen and wants a replacement before Friday. Write a polite reply from our support team offering a replacement and a prepaid return label.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Hi there, thank you for letting us know, and I'm sorry your screen arrived cracked. We'll ship a replacement today so it reaches you before Friday, and I've attached a prepaid return label for the damaged unit. Reply here if anything else comes up. Best, the Support Team",
+   "tokens": 64
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.85,
+   "internal_productivity": 0.03,
+   "engineering": 0.03,
+   "research": 0.03,
+   "personal": 0.03,
+   "waste": 0.03
+  },
+  "work": {
+   "yes": 0.95,
+   "no": 0.05
+  },
+  "complexity": {
+   "0": 0.0667,
+   "1": 0.8,
+   "2": 0.0667,
+   "3": 0.0667
+  },
+  "small_model_ok": {
+   "yes": 0.9,
+   "no": 0.1
+  },
+  "repeatable": {
+   "yes": 0.8,
+   "no": 0.2
+  },
+  "sensitive": {
+   "yes": 0.15,
+   "no": 0.85
+  },
+  "functions": {
+   "support": 0.95
+  },
+  "purpose": {
+   "transcript[0]": 0.85,
+   "none": 0.05
+  }
+ }
+}

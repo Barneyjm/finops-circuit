@@ -1,0 +1,57 @@
+{
+ "id": "02_sql_debug",
+ "model": "gpt-4-0314",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "This Postgres query double-counts revenue when an order has several shipments: SELECT o.id, SUM(o.total) FROM orders o JOIN shipments s ON s.order_id = o.id GROUP BY o.id. How do I fix it without losing orders that have no shipments?",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "The join repeats each order once per shipment, so SUM(o.total) counts it several times. Aggregate orders on their own and join shipments only for what you need: SELECT o.id, o.total, COUNT(s.id) AS shipments FROM orders o LEFT JOIN shipments s ON s.order_id = o.id GROUP BY o.id, o.total. The LEFT JOIN keeps orders with no shipments.",
+   "tokens": 96
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.03,
+   "internal_productivity": 0.03,
+   "engineering": 0.85,
+   "research": 0.03,
+   "personal": 0.03,
+   "waste": 0.03
+  },
+  "work": {
+   "yes": 0.95,
+   "no": 0.05
+  },
+  "complexity": {
+   "0": 0.0667,
+   "1": 0.0667,
+   "2": 0.8,
+   "3": 0.0667
+  },
+  "small_model_ok": {
+   "yes": 0.3,
+   "no": 0.7
+  },
+  "repeatable": {
+   "yes": 0.2,
+   "no": 0.8
+  },
+  "sensitive": {
+   "yes": 0.05,
+   "no": 0.95
+  },
+  "functions": {
+   "engineering": 0.95,
+   "finance_legal": 0.3
+  },
+  "purpose": {
+   "transcript[0]": 0.9,
+   "none": 0.05
+  }
+ }
+}

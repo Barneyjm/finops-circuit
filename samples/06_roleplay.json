@@ -1,0 +1,104 @@
+{
+ "id": "06_roleplay",
+ "model": "gpt-4-0314",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "Let's play a story game. You are a dragon guarding a mountain library and I am a thief who wants one book.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "The dragon lifts its head from a pile of scrolls. 'Thieves usually want gold. Which book is worth more to you than your life?'",
+   "tokens": 40
+  },
+  {
+   "role": "user",
+   "content": "The one with the map to the sunken city.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "The dragon's eyes narrow. 'Then answer my riddle, or become part of the collection.'",
+   "tokens": 30
+  },
+  {
+   "role": "user",
+   "content": "Let's play a story game. You are a dragon guarding a mountain library and I am a thief who wants one book.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "The dragon lifts its head from a pile of scrolls. 'Thieves usually want gold. Which book is worth more to you than your life?'",
+   "tokens": 40
+  },
+  {
+   "role": "user",
+   "content": "The one with the map to the sunken city.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "The dragon's eyes narrow. 'Then answer my riddle, or become part of the collection.'",
+   "tokens": 30
+  },
+  {
+   "role": "user",
+   "content": "Let's play a story game. You are a dragon guarding a mountain library and I am a thief who wants one book.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "The dragon lifts its head from a pile of scrolls. 'Thieves usually want gold. Which book is worth more to you than your life?'",
+   "tokens": 40
+  },
+  {
+   "role": "user",
+   "content": "The one with the map to the sunken city.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "The dragon's eyes narrow. 'Then answer my riddle, or become part of the collection.'",
+   "tokens": 30
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.02,
+   "internal_productivity": 0.02,
+   "engineering": 0.02,
+   "research": 0.02,
+   "personal": 0.9,
+   "waste": 0.02
+  },
+  "work": {
+   "yes": 0.02,
+   "no": 0.98
+  },
+  "complexity": {
+   "0": 0.0667,
+   "1": 0.8,
+   "2": 0.0667,
+   "3": 0.0667
+  },
+  "small_model_ok": {
+   "yes": 0.9,
+   "no": 0.1
+  },
+  "repeatable": {
+   "yes": 0.1,
+   "no": 0.9
+  },
+  "sensitive": {
+   "yes": 0.01,
+   "no": 0.99
+  },
+  "functions": {},
+  "purpose": {
+   "transcript[0]": 0.8,
+   "none": 0.1
+  }
+ }
+}

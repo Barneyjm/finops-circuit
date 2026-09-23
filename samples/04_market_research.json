@@ -1,0 +1,57 @@
+{
+ "id": "04_market_research",
+ "model": "gpt-4-0613",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "Compare the main pricing models for B2B analytics tools (per seat, usage based, flat tier) and what each means for a startup selling to mid-size retailers.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Per seat is predictable for buyers but caps expansion inside an account; usage based grows with the customer's data and suits retailers whose volume is seasonal, but makes their bills harder to forecast; flat tiers are simplest to sell and leave money on the table with the largest customers. For mid-size retailers a small platform fee plus usage above a threshold usually balances predictability and growth.",
+   "tokens": 180
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.03,
+   "internal_productivity": 0.03,
+   "engineering": 0.03,
+   "research": 0.85,
+   "personal": 0.03,
+   "waste": 0.03
+  },
+  "work": {
+   "yes": 0.9,
+   "no": 0.1
+  },
+  "complexity": {
+   "0": 0.0667,
+   "1": 0.0667,
+   "2": 0.8,
+   "3": 0.0667
+  },
+  "small_model_ok": {
+   "yes": 0.55,
+   "no": 0.45
+  },
+  "repeatable": {
+   "yes": 0.4,
+   "no": 0.6
+  },
+  "sensitive": {
+   "yes": 0.05,
+   "no": 0.95
+  },
+  "functions": {
+   "sales_marketing": 0.8,
+   "product_design": 0.5
+  },
+  "purpose": {
+   "transcript[0]": 0.9,
+   "none": 0.05
+  }
+ }
+}

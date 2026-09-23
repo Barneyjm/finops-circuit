@@ -1,0 +1,106 @@
+{
+ "id": "10_long_code_session",
+ "model": "gpt-4-1106-preview",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "Here's my Flask app's user model and the login route. Add rate limiting per IP, five attempts per minute.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Use Flask-Limiter: install it, create Limiter(get_remote_address, app=app), and decorate the login route with @limiter.limit('5 per minute'). Returning 429 on the sixth attempt is handled for you.",
+   "tokens": 120
+  },
+  {
+   "role": "user",
+   "content": "Now it blocks my load balancer's IP for everyone. Fix that.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Behind a proxy the remote address is the balancer. Apply werkzeug's ProxyFix middleware with x_for=1 so request.remote_addr is the client's address from X-Forwarded-For, then keep get_remote_address as the key.",
+   "tokens": 110
+  },
+  {
+   "role": "user",
+   "content": "Tests fail because they all share 127.0.0.1.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Disable the limiter in tests with app.config['RATELIMIT_ENABLED'] = False in the test config, and add one test that re-enables it to check the sixth attempt gets 429.",
+   "tokens": 90
+  },
+  {
+   "role": "user",
+   "content": "And store limits in Redis so both app servers share them.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Pass storage_uri='redis://redis:6379' to Limiter; both servers then count against the same keys. Set a short socket timeout so a Redis outage does not block logins, and decide whether to fail open or closed.",
+   "tokens": 100
+  },
+  {
+   "role": "user",
+   "content": "Fail closed. Show the final config.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "limiter = Limiter(get_remote_address, app=app, storage_uri='redis://redis:6379', storage_options={'socket_timeout': 0.5}, swallow_errors=False), with ProxyFix(app.wsgi_app, x_for=1) and RATELIMIT_ENABLED off in tests.",
+   "tokens": 130
+  },
+  {
+   "role": "user",
+   "content": "Thanks, one more: log every blocked attempt.",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "Register @app.errorhandler(429) that logs request.remote_addr, the route and the time, then returns the default 429 response.",
+   "tokens": 70
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.03,
+   "internal_productivity": 0.03,
+   "engineering": 0.85,
+   "research": 0.03,
+   "personal": 0.03,
+   "waste": 0.03
+  },
+  "work": {
+   "yes": 0.95,
+   "no": 0.05
+  },
+  "complexity": {
+   "0": 0.0667,
+   "1": 0.0667,
+   "2": 0.8,
+   "3": 0.0667
+  },
+  "small_model_ok": {
+   "yes": 0.4,
+   "no": 0.6
+  },
+  "repeatable": {
+   "yes": 0.3,
+   "no": 0.7
+  },
+  "sensitive": {
+   "yes": 0.05,
+   "no": 0.95
+  },
+  "functions": {
+   "engineering": 0.95
+  },
+  "purpose": {
+   "transcript[0]": 0.8,
+   "none": 0.05
+  }
+ }
+}

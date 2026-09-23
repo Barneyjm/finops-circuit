@@ -1,0 +1,56 @@
+{
+ "id": "09_contract_clause",
+ "model": "gpt-4-0613",
+ "language": "English",
+ "turns": [
+  {
+   "role": "user",
+   "content": "Here is clause 14.2 of our supplier agreement with Northwind Ltd, including the liability cap of 2x annual fees and the carve-outs for data breaches. Does this cap cover a breach caused by their subcontractor, and what should we negotiate?",
+   "tokens": null
+  },
+  {
+   "role": "assistant",
+   "content": "As written, the carve-out removes data breaches from the cap only for breaches caused by the supplier's own personnel, so a subcontractor's breach falls back under the 2x cap. Negotiate to extend the carve-out to subcontractors and affiliates, and ask for a separate, higher cap for data incidents backed by cyber insurance.",
+   "tokens": 150
+  }
+ ],
+ "expected_answers": {
+  "value_type": {
+   "customer_facing": 0.08,
+   "internal_productivity": 0.08,
+   "engineering": 0.08,
+   "research": 0.6,
+   "personal": 0.08,
+   "waste": 0.08
+  },
+  "work": {
+   "yes": 0.97,
+   "no": 0.03
+  },
+  "complexity": {
+   "0": 0.0667,
+   "1": 0.0667,
+   "2": 0.0667,
+   "3": 0.8
+  },
+  "small_model_ok": {
+   "yes": 0.1,
+   "no": 0.9
+  },
+  "repeatable": {
+   "yes": 0.1,
+   "no": 0.9
+  },
+  "sensitive": {
+   "yes": 0.85,
+   "no": 0.15
+  },
+  "functions": {
+   "finance_legal": 0.95
+  },
+  "purpose": {
+   "transcript[0]": 0.9,
+   "none": 0.03
+  }
+ }
+}
