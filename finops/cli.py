@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
@@ -35,6 +36,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default=None, help="fetch: data/wildchat.jsonl; html: report.html")
     ap.add_argument("--save", default=None, help="report: also write the findings (audit included) to this JSON file, for `finops html`")
     ap.add_argument("--with-text", action="store_true", help="html: include each conversation's first message (left out by default)")
+    ap.add_argument("--workers", type=int, default=4, help="conversations analyzed at once")
     ap.add_argument("--json", action="store_true", help="print full findings, audit included")
     ap.add_argument("--by", default="task", help=f"report: comma-separated tag keys to group spend by ({', '.join(TAG_KEYS)})")
     ap.add_argument("--v2", action=argparse.BooleanOptionalAction, default=None, help=f"ask the circuit v2 questions (default: on for {', '.join(V2_BACKENDS)})")
@@ -67,16 +69,24 @@ def main(argv: list[str] | None = None) -> None:
     if unknown := [k for k in by if k not in TAG_KEYS]:
         raise SystemExit(f"--by: unknown tag keys {unknown}; use {', '.join(TAG_KEYS)}")
     apps = app_ids(convs)  # a template shows only across conversations, so the whole set is fingerprinted first
-    findings = []
-    for conv in convs:
+
+    def one(conv):
         try:
-            f = analyze(conv, backend, model=args.model, circuit=circuit, app=apps[conv["id"]])
+            return analyze(conv, backend, model=args.model, circuit=circuit, app=apps[conv["id"]])
         except Exception as e:
             print(f"   {conv.get('file', conv['id'])}: skipped ({type(e).__name__}: {str(e)[:120]})", file=sys.stderr)
-            continue
-        findings.append(f)
-        if args.command == "analyze":
-            print(f.to_json() if args.json else _line(conv, f))
+            return None
+
+    findings = []
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+        for i, (conv, f) in enumerate(zip(convs, pool.map(one, convs), strict=True), 1):  # map keeps the input order
+            if f is None:
+                continue
+            findings.append(f)
+            if args.command == "analyze":
+                print(f.to_json() if args.json else _line(conv, f))
+            elif i % 100 == 0:
+                print(f"   {i}/{len(convs)}", file=sys.stderr, flush=True)
     if args.command == "report":
         print(json.dumps(report(findings, by, app_labels(convs)), indent=1))
         if args.save:

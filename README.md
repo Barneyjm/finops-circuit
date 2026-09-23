@@ -90,23 +90,26 @@ before it and a long conversation costs roughly the square of its length. Output
 from the data; input tokens are estimated at four characters a token. `finops/pricing.py`
 holds list prices per model; edit it for your contracts.
 
-## One hundred real conversations
+## A thousand real conversations
 
-`finops report` on 100 WildChat conversations (8 models from gpt-3.5-turbo to o1-preview,
-half not in English), tagged by Jev:
+`finops report` on 1,000 WildChat conversations (14 models, June 2023 to July 2025), tagged by
+Jev, then `finops html`:
 
 | | |
 |---|---|
-| tag coverage (share of spend) | task, subtask, domain, data_class 100%; workload 78%; environment 56% |
-| apps found | 4, among them a paraphrasing tool, a SQL optimizer and a JSON translation job; 88 conversations adhoc |
-| largest single line | one data-analysis conversation on o1-preview: 43% of all spend |
-| business share of spend | 20% |
-| actions | 71 policy, 18 cache, 6 downgrade, 8 dev/test on a premium model, 7 hold, 3 trim context, 11 review |
+| spend | $7.84 at list prices |
+| tag coverage (share of spend) | task, domain, data_class 100%; subtask 99.8%; workload 80%; environment 77%; fully tagged 64% |
+| largest tasks by spend | writing 24%, code 19%, creative 18%, research 17% |
+| apps found | 44 templated programs |
+| business share of spend | 15% |
+| costliest month | November 2024 |
 
-Environment is the weak tag, as it would be in any bill with no metadata: whether a
-conversation is a test is rarely in what it says. Declare it where the traffic comes from and
-the circuit only tags what it can read. circuit-1.7b v2.0 was never trained on this taxonomy
-and leaves most of it untagged; Jev tags it confidently. Swapping the backend is one flag.
+WildChat is the log of a free public chatbot run for research, so personal use, role-play and
+homework dominate it and business use is low; it is a stress test for the tags, not a picture
+of a company's bill. Environment is the weakest tag because whether traffic is a test is rarely
+in what it says: declare it where the traffic comes from. circuit-1.7b v2.0 was never trained
+on this taxonomy and leaves most of it untagged; Jev tags it confidently. The backend is one
+flag.
 
 ## Data
 

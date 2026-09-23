@@ -113,7 +113,7 @@ def test_wildchat_rows_keep_only_what_a_cost_review_needs():
         "conversation": [{"role": "user", "content": "hi", "token_counter": None, "country": "Somewhere"}, {"role": "assistant", "content": "hello", "token_counter": 3}],
     }
     conv = from_wildchat(row)
-    assert set(conv) == {"id", "model", "language", "toxic", "turns"} and conv["turns"][1]["tokens"] == 3
+    assert set(conv) == {"id", "model", "timestamp", "language", "toxic", "turns"} and conv["turns"][1]["tokens"] == 3
     assert "Somewhere" not in str(conv) and "abc" not in str(conv)
 
 
@@ -147,3 +147,11 @@ def test_the_dashboard_carries_the_data_and_no_conversation_text_by_default():
     assert "<title>LLM Spend Ledger</title>" in body and '"rows":' in body and "cracked screen" not in body
     with_text = render(findings, texts={f["id"]: f["first_message"] for f in findings})
     assert "cracked screen" in with_text and document(body).startswith("<!doctype html>")
+
+
+def test_spend_by_month():
+    a = analyze({**SAMPLES["01_support_reply"], "timestamp": "2024-05-02T10:00:00"}, FakeBackend(), circuit=V2)
+    b = analyze({**SAMPLES["02_sql_debug"], "timestamp": "2024-05-20T09:00:00"}, FakeBackend(), circuit=V2)
+    c = analyze({**SAMPLES["03_meeting_summary"], "timestamp": "2024-07-01T00:00:00"}, FakeBackend(), circuit=V2)
+    months = report([a, b, c])["by_month"]
+    assert list(months) == ["2024-05", "2024-07"] and months["2024-05"] == pytest.approx(round(a.cost.usd + b.cost.usd, 4))

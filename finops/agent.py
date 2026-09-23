@@ -28,6 +28,7 @@ CONTEXT_HEAVY_SHARE = 1 / 3  # is flagged: a summary or a fresh thread would cos
 class Finding:
     id: str
     model: str
+    timestamp: str | None  # ISO date and time of the conversation, when the data has one
     turns: int
     cost: Cost
     tags: dict[str, str]  # every key in TAG_KEYS; "untagged" where the circuit was not sure
@@ -107,7 +108,7 @@ def analyze(conv: dict[str, Any], backend: Any, *, model: str | None = None, cir
         "answers": answers,
         "gates": gates,
     }
-    return Finding(conv["id"], conv["model"], replies, spend, tags, source, business, actions, savings, audit)
+    return Finding(conv["id"], conv["model"], conv.get("timestamp"), replies, spend, tags, source, business, actions, savings, audit)
 
 
 def _compact(a: dict[str, Any]) -> Any:
@@ -116,6 +117,14 @@ def _compact(a: dict[str, Any]) -> Any:
         d = views[""]
         return round(d["yes"], 3) if set(d) == {"yes", "no"} else {k: round(v, 3) for k, v in d.items()}
     return {k.strip("[]"): round(v.get("yes", max(v.values())), 3) for k, v in views.items()}
+
+
+def _by_month(findings: list[Finding]) -> dict[str, float]:
+    months: dict[str, float] = defaultdict(float)
+    for f in findings:
+        if f.timestamp:
+            months[f.timestamp[:7]] += f.cost.usd
+    return months
 
 
 def report(findings: list[Finding], by: tuple[str, ...] = ("task",), labels: dict[str, str] | None = None) -> dict[str, Any]:
@@ -154,6 +163,7 @@ def report(findings: list[Finding], by: tuple[str, ...] = ("task",), labels: dic
         "savings_usd": {k: round(v, 4) for k, v in savings.items()},
         "savings_share": share(sum(savings.values())),
         "output_tokens_measured_share": round(sum(f.cost.output_measured for f in findings) / out_tokens, 3) if out_tokens else 0.0,
+        "by_month": {m: round(v, 4) for m, v in sorted(_by_month(findings).items())},
     }
     if labels and "app" in by:
         result["apps"] = labels

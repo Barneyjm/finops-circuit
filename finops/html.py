@@ -28,6 +28,7 @@ def _row(f: Any, text: str | None) -> dict[str, Any]:
     return {
         "id": d["id"][:12],
         "model": d["model"],
+        "month": (d.get("timestamp") or "")[:7] or None,
         "replies": d["turns"],
         "usd": c["usd"],
         "in": c["input_tokens"],
@@ -47,6 +48,7 @@ def render(findings: list[Any], *, apps: dict[str, str] | None = None, backend: 
     data = {
         "rows": [_row(f, (texts or {}).get(f["id"] if isinstance(f, dict) else f.id)) for f in findings],
         "keys": list(TAG_KEYS),
+        "extra_keys": ["model", "month"],  # grouping keys that are facts about the call, not tags
         "apps": apps or {},
         "backend": backend,
         "source": source,
@@ -70,8 +72,8 @@ PAGE = r"""<title>LLM Spend Ledger</title>
   --ground: #F6F7F5; --panel: #FFFFFF; --ink: #1B2124; --muted: #5E686D; --rule: #DDE2E0; --faint: #EEF1EF;
   --accent: #2F4FB5; --accent-soft: #E3E8F8; --good: #2E7D4F; --good-soft: #E1F1E7; --warn: #B7791F; --warn-soft: #F7ECD9;
   --crit: #B83A3A; --crit-soft: #F6E1E1; --focus: #2F4FB5;
-  --t0: #2F4FB5; --t1: #4A68C8; --t2: #6A84D3; --t3: #8BA0DD; --t4: #AABBE6; --t5: #C8D3EF; --t6: #DCE3F5;
-  --on0: #FFFFFF; --on1: #FFFFFF; --on2: #FFFFFF; --on3: #1B2124; --on4: #1B2124; --on5: #1B2124; --on6: #1B2124;
+  --t0: #2F4FB5; --t1: #1F7F82; --t2: #7A55B8; --t3: #A0782A; --t4: #3F7A4F; --t5: #A04E78; --t6: #C9CFCC;
+  --on0: #FFFFFF; --on1: #FFFFFF; --on2: #FFFFFF; --on3: #FFFFFF; --on4: #FFFFFF; --on5: #FFFFFF; --on6: #1B2124;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -79,8 +81,8 @@ PAGE = r"""<title>LLM Spend Ledger</title>
     --ground: #12161A; --panel: #192026; --ink: #E4E8EB; --muted: #97A2AA; --rule: #2B343B; --faint: #20282F;
     --accent: #8EA6FF; --accent-soft: #232C4A; --good: #6CC592; --good-soft: #1D3226; --warn: #E3B061; --warn-soft: #3A2E1B;
     --crit: #EC8A8A; --crit-soft: #3C2224; --focus: #8EA6FF;
-    --t0: #8EA6FF; --t1: #7590F0; --t2: #5E7AD8; --t3: #4B66BE; --t4: #3B53A0; --t5: #2F4383; --t6: #263668;
-    --on0: #12161A; --on1: #12161A; --on2: #FFFFFF; --on3: #FFFFFF; --on4: #FFFFFF; --on5: #E4E8EB; --on6: #E4E8EB;
+    --t0: #8EA6FF; --t1: #5CC4C4; --t2: #B89AF0; --t3: #E0B865; --t4: #7FC794; --t5: #E896BF; --t6: #3A444C;
+    --on0: #12161A; --on1: #12161A; --on2: #12161A; --on3: #12161A; --on4: #12161A; --on5: #12161A; --on6: #E4E8EB;
   }
 }
 :root[data-theme="dark"] {
@@ -88,8 +90,8 @@ PAGE = r"""<title>LLM Spend Ledger</title>
   --ground: #12161A; --panel: #192026; --ink: #E4E8EB; --muted: #97A2AA; --rule: #2B343B; --faint: #20282F;
   --accent: #8EA6FF; --accent-soft: #232C4A; --good: #6CC592; --good-soft: #1D3226; --warn: #E3B061; --warn-soft: #3A2E1B;
   --crit: #EC8A8A; --crit-soft: #3C2224; --focus: #8EA6FF;
-  --t0: #8EA6FF; --t1: #7590F0; --t2: #5E7AD8; --t3: #4B66BE; --t4: #3B53A0; --t5: #2F4383; --t6: #263668;
-  --on0: #12161A; --on1: #12161A; --on2: #FFFFFF; --on3: #FFFFFF; --on4: #FFFFFF; --on5: #E4E8EB; --on6: #E4E8EB;
+  --t0: #8EA6FF; --t1: #5CC4C4; --t2: #B89AF0; --t3: #E0B865; --t4: #7FC794; --t5: #E896BF; --t6: #3A444C;
+  --on0: #12161A; --on1: #12161A; --on2: #12161A; --on3: #12161A; --on4: #12161A; --on5: #12161A; --on6: #E4E8EB;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -104,6 +106,7 @@ header { display: grid; gap: 18px; }
 .statement dt { font-size: 12px; color: var(--muted); }
 .statement dd { margin: 2px 0 0; font-size: 22px; font-weight: 500; }
 .statement .good { color: var(--good); }
+.statement .txt { font-size: 16px; padding-top: 5px; }
 .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
 .grid2 { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 @media (max-width: 860px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
@@ -132,6 +135,11 @@ tr.grp:hover td, tr.sel td { background: var(--accent-soft); }
 .stack .d { background: var(--good); } .stack .i { background: var(--accent); } .stack .c { background: var(--muted); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); }
 .legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+#timechart svg { display: block; width: 100%; height: auto; }
+#timechart .seg { cursor: pointer; }
+#timechart .seg:hover { opacity: 0.8; }
+#timechart text { fill: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; }
+#timechart .grid { stroke: var(--faint); }
 .acts { display: grid; gap: 8px; }
 .act { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; font-size: 14px; }
 .act .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); align-self: center; }
@@ -175,6 +183,12 @@ footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--rul
     <div class="tablewrap"><table id="groups"><thead><tr><th>Group</th><th class="n">Conversations</th><th class="n">Spend</th><th class="n">Share</th></tr></thead><tbody></tbody></table></div>
   </section>
 
+  <section class="panel" aria-labelledby="h-time" id="time-panel">
+    <div class="controls"><h2 id="h-time" style="margin-right:auto">Spend by month</h2><span class="sub" style="margin:0;font-size:13px" id="time-note"></span></div>
+    <div id="timechart"></div>
+    <div class="legend" id="time-legend"></div>
+  </section>
+
   <div class="grid2">
     <section class="panel" aria-labelledby="h-cov">
       <h2 id="h-cov">Tag coverage, share of spend</h2>
@@ -202,6 +216,7 @@ footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--rul
 const DATA = __DATA__;
 const rows = DATA.rows;
 const total = rows.reduce((s, r) => s + r.usd, 0);
+const axis = (x) => (x === 0 ? "$0" : x >= 1 ? "$" + x.toFixed(x % 1 ? 2 : 0) : "$" + x.toFixed(x >= 0.1 ? 2 : 3));
 const fmt = (x) => x >= 1 ? "$" + x.toFixed(2) : x >= 0.01 ? "$" + x.toFixed(3) : "$" + x.toFixed(4);
 const pct = (x) => (total ? (100 * x / total) : 0).toFixed(x / total < 0.1 ? 1 : 0) + "%";
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -216,21 +231,26 @@ function load(k) { try { return localStorage.getItem(k); } catch (e) { return nu
   const saved = rows.reduce((s, r) => s + r.savings, 0);
   const tagged = rows.filter((r) => !Object.values(r.tags).includes("untagged")).reduce((s, r) => s + r.usd, 0);
   const biz = rows.filter((r) => r.business === true).reduce((s, r) => s + r.usd, 0);
-  const items = [["Spend", fmt(total)], ["Conversations", rows.length], ["Fully tagged", pct(tagged)], ["Business use", pct(biz)], ["Savings found", fmt(saved) + " (" + pct(saved) + ")", "good"]];
+  const ms = rows.map((r) => r.month).filter(Boolean).sort();
+  const mon = (k) => new Date(k + "-01T00:00:00").toLocaleString("en", { month: "short", year: "numeric" });
+  const items = [["Spend", fmt(total)], ["Conversations", rows.length.toLocaleString("en")], ...(ms.length ? [["Period", mon(ms[0]) + " to " + mon(ms[ms.length - 1]), "txt"]] : []), ["Fully tagged", pct(tagged)], ["Business use", pct(biz)], ["Savings found", fmt(saved) + " (" + pct(saved) + ")", "good"]];
   document.getElementById("statement").innerHTML = items.map(([k, v, c]) => `<div><dt>${k}</dt><dd class="num ${c || ""}">${v}</dd></div>`).join("");
   const models = new Set(rows.map((r) => r.model)).size;
-  document.getElementById("lede").textContent = `${rows.length} conversations across ${models} models, tagged by ${DATA.backend || "a decision model"}${DATA.source ? " from " + DATA.source : ""}. Pick the tags to group by; click a group to see its conversations.`;
+  document.getElementById("lede").textContent = `${rows.length.toLocaleString("en")} conversations across ${models} models, tagged by ${DATA.backend || "a decision model"}${DATA.source ? " from " + DATA.source : ""}. Pick the tags to group by; click a group to see its conversations.`;
 })();
 
 // ---- group-by
 const by1 = document.getElementById("by1"), by2 = document.getElementById("by2");
-by1.innerHTML = DATA.keys.map((k) => `<option value="${k}">${k}</option>`).join("");
-by2.innerHTML = `<option value="">nothing</option>` + DATA.keys.map((k) => `<option value="${k}">${k}</option>`).join("");
+const ALLKEYS = [...DATA.keys, ...(DATA.extra_keys || [])];
+const opts = (list) => list.map((k) => `<option value="${k}">${k}</option>`).join("");
+by1.innerHTML = `<optgroup label="Tags">${opts(DATA.keys)}</optgroup><optgroup label="The call">${opts(DATA.extra_keys || [])}</optgroup>`;
+by2.innerHTML = `<option value="">nothing</option><optgroup label="Tags">${opts(DATA.keys)}</optgroup><optgroup label="The call">${opts(DATA.extra_keys || [])}</optgroup>`;
 by1.value = load("finops.by1") || "task";
 by2.value = load("finops.by2") ?? "";
 by1.onchange = by2.onchange = () => { store("finops.by1", by1.value); store("finops.by2", by2.value); filter = null; draw(); };
 
-function keyOf(r) { return by2.value && by2.value !== by1.value ? r.tags[by1.value] + " / " + r.tags[by2.value] : r.tags[by1.value]; }
+const val = (r, k) => (k === "model" ? r.model : k === "month" ? r.month || "undated" : r.tags[k]);
+function keyOf(r) { return by2.value && by2.value !== by1.value ? val(r, by1.value) + " / " + val(r, by2.value) : val(r, by1.value); }
 
 function groups() {
   const g = new Map();
@@ -271,7 +291,46 @@ function draw() {
     <td>${esc(g.key)}${DATA.apps[g.key] ? `<div class="sub" style="margin:0;font-size:12px">${esc(DATA.apps[g.key])}…</div>` : ""}<div class="bar"><i style="width:${(100 * g.usd) / max}%"></i></div></td>
     <td class="n">${g.n}</td><td class="n">${fmt(g.usd)}</td><td class="n">${pct(g.usd)}</td></tr>`).join("");
   document.querySelectorAll("#groups tr.grp").forEach((t) => { t.onclick = () => pick(t.dataset.k); t.onkeydown = (e) => { if (e.key === "Enter") pick(t.dataset.k); }; });
+  timechart(gs);
   ledger();
+}
+
+// ---- spend by month, stacked by the current grouping (top six, then the rest)
+function timechart(gs) {
+  const panel = document.getElementById("time-panel");
+  const months = [...new Set(rows.map((r) => r.month).filter(Boolean))].sort();
+  if (months.length < 2) { panel.hidden = true; return; }
+  panel.hidden = false;
+  // every month between the first and last, so gaps show as gaps
+  const all = []; let [y, m] = months[0].split("-").map(Number); const [ly, lm] = months[months.length - 1].split("-").map(Number);
+  while (y < ly || (y === ly && m <= lm)) { all.push(`${y}-${String(m).padStart(2, "0")}`); m++; if (m > 12) { m = 1; y++; } }
+  const top = gs.slice(0, 6).map((g) => g.key), rest = "everything else";
+  const band = (r) => (top.includes(keyOf(r)) ? keyOf(r) : rest);
+  const cells = new Map(); // month -> band -> usd
+  for (const r of rows) { if (!r.month) continue; const mm = cells.get(r.month) || new Map(); mm.set(band(r), (mm.get(band(r)) || 0) + r.usd); cells.set(r.month, mm); }
+  const tot = all.map((mo) => [...(cells.get(mo) || new Map()).values()].reduce((a, b) => a + b, 0));
+  const maxV = Math.max(...tot, 1e-9);
+  const step = (() => { const raw = maxV / 4; const p = 10 ** Math.floor(Math.log10(raw)); return [1, 2, 2.5, 5, 10].map((k) => k * p).find((k) => k >= raw); })();
+  const yMax = Math.ceil(maxV / step) * step;
+  const W = 1000, H = 260, L = 64, R = 12, T = 10, B = 34, bw = (W - L - R) / all.length;
+  const ys = (v) => T + (H - T - B) * (1 - v / yMax);
+  const bands = [...top, rest];
+  const colour = (b) => (b === rest ? "var(--rule)" : `var(--t${Math.min(top.indexOf(b), 6)})`);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Spend by month, stacked by ${esc(by1.value)}">`;
+  for (let v = 0; v <= yMax + 1e-12; v += step) svg += `<line class="grid" x1="${L}" x2="${W - R}" y1="${ys(v)}" y2="${ys(v)}"/><text x="${L - 8}" y="${ys(v) + 4}" text-anchor="end">${axis(v)}</text>`;
+  const every = Math.ceil(all.length / 12);
+  all.forEach((mo, i) => {
+    let base = 0; const x = L + i * bw + bw * 0.12, w = bw * 0.76; const mm = cells.get(mo) || new Map();
+    for (const b of bands) { const v = mm.get(b) || 0; if (!v) continue; const y0 = ys(base + v), h = ys(base) - ys(base + v); base += v;
+      svg += `<rect class="seg" x="${x}" y="${y0}" width="${w}" height="${Math.max(h, 0.5)}" fill="${colour(b)}" data-k="${esc(b)}"><title>${esc(mo)}  ${esc(b)}: ${fmt(v)}</title></rect>`; }
+    if (i % every === 0) svg += `<text x="${L + i * bw + bw / 2}" y="${H - 12}" text-anchor="middle">${mo}</text>`;
+  });
+  svg += `</svg>`;
+  const chart = document.getElementById("timechart"); chart.innerHTML = svg;
+  chart.querySelectorAll(".seg").forEach((s) => { if (s.dataset.k !== rest) s.onclick = () => pick(s.dataset.k); });
+  document.getElementById("time-legend").innerHTML = bands.filter((b) => b !== rest || rows.some((r) => r.month && band(r) === rest)).map((b) => `<span style="--c:${colour(b)}">${esc(b)}</span>`).join("");
+  const peak = all[tot.indexOf(Math.max(...tot))];
+  document.getElementById("time-note").textContent = `${all[0]} to ${all[all.length - 1]}; the most expensive month, ${peak}, was ${fmt(Math.max(...tot))}`;
 }
 
 function pick(k) { filter = filter === k ? null : k; draw(); document.getElementById("h-ledger").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" }); }

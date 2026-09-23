@@ -1,6 +1,6 @@
 """Conversations in, one format out.
 
-A conversation here is `{"id", "model", "language", "turns": [{"role", "content", "tokens"}]}`,
+A conversation here is `{"id", "model", "timestamp", "language", "turns": [{"role", "content", "tokens"}]}`,
 plus `expected_answers` in the hand-written samples, which the offline backend reads. WildChat
 rows are converted on the way in, and only these fields are kept: WildChat also records a
 country, a state, a hashed IP and browser headers per conversation, which a cost report has no
@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import json
 import random
-import urllib.parse
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -25,20 +26,43 @@ WILDCHAT_ROWS = 3_199_860  # train split rows at the time of writing; offsets pa
 def from_wildchat(row: dict[str, Any]) -> dict[str, Any]:
     """A WildChat-4.8M row as a conversation: model, language, turns, measured output tokens."""
     turns = [{"role": t["role"], "content": t["content"], "tokens": t.get("token_counter") if t["role"] == "assistant" else None} for t in row["conversation"] if t.get("content")]
-    return {"id": row["conversation_hash"], "model": row["model"], "language": row.get("language"), "toxic": bool(row.get("toxic")), "turns": turns}
+    return {
+        "id": row["conversation_hash"],
+        "model": row["model"],
+        "timestamp": str(row.get("timestamp") or "")[:19] or None,
+        "language": row.get("language"),
+        "toxic": bool(row.get("toxic")),
+        "turns": turns,
+    }
 
 
-def fetch_wildchat(n: int, seed: int = 0, batch: int = 5) -> list[dict[str, Any]]:
+def _get(url: str, tries: int = 8) -> dict[str, Any]:
+    """GET JSON, waiting and retrying when the datasets server rate-limits (429) or hiccups (5xx)."""
+    wait = 2.0
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"user-agent": "finops-circuit"}), timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if (e.code != 429 and e.code < 500) or attempt == tries - 1:
+                raise
+            retry_after = e.headers.get("retry-after")
+            time.sleep(float(retry_after) if retry_after and retry_after.isdigit() else wait)
+            wait = min(wait * 2, 60.0)
+    raise RuntimeError("unreachable")
+
+
+def fetch_wildchat(n: int, seed: int = 0, batch: int = 10, pause: float = 0.3) -> list[dict[str, Any]]:
     """`n` conversations from random places in WildChat-4.8M, via Hugging Face's datasets
     server: no shard is downloaded. Small batches from many offsets, since neighbouring rows
-    share a period and a model. ODC-BY; attribute AI2's WildChat when you publish from it."""
+    share a period and a model; a short pause between requests, and backoff when the server
+    asks for it. ODC-BY; attribute AI2's WildChat when you publish from it."""
     rng = random.Random(seed)
     out: list[dict[str, Any]] = []
     while len(out) < n:
         url = ROWS.format(offset=rng.randrange(WILDCHAT_ROWS - batch), length=min(batch, n - len(out)))
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"user-agent": "finops-circuit"}), timeout=60) as r:
-            rows = json.load(r)["rows"]
-        out += [from_wildchat(x["row"]) for x in rows if x["row"].get("conversation")]
+        out += [from_wildchat(x["row"]) for x in _get(url)["rows"] if x["row"].get("conversation")]
+        time.sleep(pause)
     return out[:n]
 
 
