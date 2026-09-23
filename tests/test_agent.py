@@ -217,3 +217,110 @@ def test_focus_rows_carry_the_mandatory_columns_and_add_up():
     tags = json.loads(out[0]["Tags"])
     assert all(k.startswith("finops-circuit/") for k in tags) and "untagged" not in tags.values()
     assert out[0]["ServiceSubcategory"] == "Generative AI" and out[0]["PricingUnit"] == "1000000 Tokens"
+
+
+PRICES = """
+[settings]
+currency = "EUR"
+small_model = "tiny"
+
+[models."tiny"]
+input = 0.10
+output = 0.40
+cached_input = 0.05
+
+[models."big"]
+input = 2.00
+output = 8.00
+cached_input = 0.50
+discount = 0.25
+
+[models."big-nocache"]
+input = 2.00
+output = 8.00
+"""
+
+
+def prices(tmp_path, text=PRICES):
+    from finops import load_prices
+
+    (tmp_path / "prices.toml").write_text(text)
+    return load_prices(tmp_path / "prices.toml")
+
+
+def test_a_price_table_sets_prices_discount_currency_and_the_small_model(tmp_path):
+    table = prices(tmp_path)
+    assert table.of("big-2025-01-01").cached_input == 0.50 and table.of("big-nocache-x").cached_input is None  # longest prefix wins
+    turns = [{"role": "user", "content": "x" * 400}, {"role": "assistant", "content": "y", "tokens": 50}]
+    c = cost("big", turns, table)
+    assert c.usd == pytest.approx((100 * 2 + 50 * 8) / 1e6) and c.contracted_usd == pytest.approx(c.usd * 0.75) and c.currency == "EUR"
+    assert c.usd_on_small_model == pytest.approx((100 * 0.10 + 50 * 0.40) / 1e6)
+    with pytest.raises(ValueError, match="discount"):
+        prices(tmp_path, PRICES.replace("discount = 0.25", "discount = 1.5"))
+    with pytest.raises(KeyError, match="tinier"):
+        prices(tmp_path, PRICES.replace('small_model = "tiny"', 'small_model = "tinier"').replace('[models."tiny"]', '[models."other"]'))
+
+
+def test_measured_usage_is_used_as_is_and_cached_tokens_bill_at_the_cache_price(tmp_path):
+    table = prices(tmp_path)
+    turns = [
+        {"role": "user", "content": "x" * 4000},
+        {"role": "assistant", "content": "y", "usage": {"input_tokens": 1200, "output_tokens": 80, "cached_tokens": 0}},
+        {"role": "user", "content": "z" * 40},
+        {"role": "assistant", "content": "w", "usage": {"input_tokens": 1300, "output_tokens": 90, "cached_tokens": 1024}},
+    ]
+    c = cost("big", turns, table)
+    assert (c.input_tokens, c.cached_tokens, c.output_tokens) == (2500, 1024, 170) and c.input_measured and c.output_measured == 170
+    assert c.usd == pytest.approx(((2500 - 1024) * 2 + 1024 * 0.50 + 170 * 8) / 1e6)
+    assert c.cached_usd == pytest.approx(1024 * 0.50 / 1e6)
+    assert not cost("big", [{"role": "user", "content": "x" * 40}, {"role": "assistant", "content": "y"}], table).input_measured
+
+
+def test_a_long_conversation_on_a_model_with_a_prompt_cache_is_told_to_cache(tmp_path):
+    table = prices(tmp_path)
+    conv = {**SAMPLES["10_long_code_session"], "model": "big"}
+    f = analyze(conv, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=table)
+    assert any(a.startswith("prompt caching") for a in f.actions) and not any(a.startswith("trim") for a in f.actions)
+    assert f.action_savings["prompt caching"] == pytest.approx(f.cost.resent_tokens * (2.00 - 0.50) / 1e6)
+    assert f.savings_usd == pytest.approx(sum(f.action_savings.values())) and f.savings_usd < f.cost.usd
+    nocache = analyze({**conv, "model": "big-nocache"}, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=table)
+    assert not any(a.startswith("prompt caching") for a in nocache.actions)  # no cache price: trim context is the fallback
+
+
+def test_focus_bills_cached_input_on_its_own_row_after_the_discount(tmp_path):
+    from finops.focus import rows
+
+    table = prices(tmp_path)
+    conv = {
+        "id": "c1",
+        "model": "big",
+        "timestamp": "2024-05-01T10:00:00",
+        "turns": [
+            {"role": "user", "content": "Summarise the attached quarterly supplier report for the ops team."},
+            {"role": "assistant", "content": "Summary.", "usage": {"input_tokens": 3000, "output_tokens": 200, "cached_tokens": 2048}},
+        ],
+    }
+    f = analyze(conv, FakeBackend(), circuit=V2, prices=table)
+    out = rows([f], prices=table)
+    assert [r["SkuId"] for r in out] == ["big/input-tokens", "big/cached-input-tokens", "big/output-tokens"]
+    assert [r["ConsumedQuantity"] for r in out] == [3000 - 2048, 2048, 200]
+    assert sum(r["ListCost"] for r in out) == pytest.approx(f.cost.usd)
+    assert sum(r["BilledCost"] for r in out) == pytest.approx(f.cost.contracted_usd) == pytest.approx(f.cost.usd * 0.75)
+    assert out[1]["ListUnitPrice"] == 0.50 and out[1]["ContractedUnitPrice"] == pytest.approx(0.375) and out[0]["BillingCurrency"] == "EUR"
+    assert out[0]["x_QuantityEstimated"] == "false"
+
+
+def test_reprice_decides_again_from_the_saved_gates_without_the_model(tmp_path):
+    from dataclasses import asdict
+
+    from finops import reprice
+
+    conv = {**SAMPLES["10_long_code_session"], "model": "big"}
+    old = prices(tmp_path, PRICES.replace("cached_input = 0.50\n", ""))  # the same table before "big" got a cache price
+    before = analyze(conv, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=old)
+    assert not any(a.startswith("prompt caching") for a in before.actions)
+    table = prices(tmp_path)
+    again = analyze(conv, FakeBackend(), circuit=V2, app=APPS["10_long_code_session"], prices=table)
+    after = reprice(json.loads(json.dumps(asdict(before), default=str)), conv, prices=table)
+    assert after.cost == again.cost and after.actions == again.actions and after.action_savings == pytest.approx(again.action_savings)
+    assert after.tags == before.tags and after.audit == json.loads(json.dumps(before.audit, default=str))

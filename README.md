@@ -35,7 +35,7 @@ flowchart LR
   LOGS --> JSONL
 
   subgraph PER["Per conversation (agent.py)"]
-    PRICE["pricing.py<br/>tokens x price table<br/>history resent every turn"]
+    PRICE["pricing.py<br/>tokens x prices.toml<br/>measured usage, cache price, discount"]
     S1["Stage 1 circuit<br/>task, domain, environment,<br/>workload, data_class,<br/>work, complexity, small_model_ok, repeatable"]
     S2["Stage 2 circuit<br/>subtask of the tagged task only"]
     GATES["Gates, evaluated in the SDK<br/>argmax with confidence floor -> tag or untagged<br/>policy / downgrade / cache / hold / dev_test"]
@@ -89,6 +89,7 @@ uv run finops report data/wildchat.jsonl --backend jev --by task,subtask
 | `finops report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
 | `finops report ... --save findings.json` then `finops html findings.json` | the dashboard: one self-contained HTML file (conversation text left out unless `--with-text`) |
 | `finops focus findings.json --out focus.csv` | the same spend as a FOCUS 1.4 Cost and Usage dataset |
+| `finops reprice findings.json --prices mine.toml` | the saved findings under a new price table: costs and actions again, no model calls |
 | `finops diagram` | the circuit as Mermaid |
 
 `--backend` picks the model, as in [call-center-circuit](https://github.com/Barneyjm/call-center-circuit):
@@ -157,8 +158,9 @@ option, or a tag named `app` (set in code) is refused.
 ## FOCUS
 
 `finops focus` writes the findings as a [FOCUS 1.4](https://focus.finops.org) Cost and Usage
-dataset, so LLM spend loads into the same FinOps tools as cloud bills. Each conversation is two
-usage rows, input tokens and output tokens, since they are priced separately:
+dataset, so LLM spend loads into the same FinOps tools as cloud bills. Each conversation is a
+usage row per kind of token, since each is priced separately: input, cached input (when the log
+recorded any) and output.
 
 | column | value |
 |---|---|
@@ -167,17 +169,18 @@ usage rows, input tokens and output tokens, since they are priced separately:
 | ChargeCategory, ChargeFrequency, PricingCategory | Usage, Usage-Based, Standard |
 | ConsumedQuantity / ConsumedUnit | tokens / `Tokens` |
 | PricingQuantity / PricingUnit | tokens / 1e6 / `1000000 Tokens` |
-| ListCost = ContractedCost = EffectiveCost = BilledCost | tokens x list price |
+| ListUnitPrice, ContractedUnitPrice | the price table's list price, and after its `discount` |
+| ListCost; ContractedCost = EffectiveCost = BilledCost | tokens x list price; the same after the discount |
+| BillingCurrency, PricingCurrency | the price table's `currency` |
 | ChargePeriodStart/End, BillingPeriodStart/End | the conversation's hour, its month |
 | ResourceId / ResourceName / ResourceType | the conversation / its app / `Conversation` |
-| SkuId, SkuPriceId, SkuMeter | `<model>/input-tokens`, its list price, `Input Tokens` |
+| SkuId, SkuPriceId, SkuMeter | `<model>/input-tokens` (or `cached-input-tokens`, `output-tokens`), its price, `Input Tokens` |
 | Tags | declared tags as given; inferred and code tags under the `finops-circuit/` prefix |
 | x_ columns | tag sources, whether a quantity is estimated, actions, potential savings |
 
 FOCUS wants one prefix-free user tag scheme and a prefix on every other, so what a conversation
 declares keeps its keys and what this tool infers carries `finops-circuit/`. Untagged and n/a
-values are left out of Tags. Input quantities are estimates (`x_QuantityEstimated`). Costs are
-list prices; there is no contract data to apply.
+values are left out of Tags. Quantities the log did not record are marked `x_QuantityEstimated`.
 
 ## What the report recommends
 
@@ -186,17 +189,57 @@ Gates over the same answers (`finops/circuit.py`), actions in code (`finops/agen
 | action | when | saves |
 |---|---|---|
 | policy | not business use | all of it |
-| dev/test on a premium model | environment is dev_test and the model is not small | the difference to gpt-4o-mini |
-| downgrade | a small model would do and the work is not hard | the difference to gpt-4o-mini |
+| dev/test on a premium model | environment is dev_test and the model is not small | the difference to the table's `small_model` (gpt-4o-mini) |
+| downgrade | a small model would do and the work is not hard | the difference to `small_model` |
+| prompt caching | the model (or the one it moves to) has a cache price, and resent history that the cache did not serve is 10% of the cost or more | that history at the cache price instead of full price |
 | cache or template | many people make the same request | no dollar figure: depends on repeats |
 | hold | confidential or regulated data | nothing moves models or gets cached without a person |
-| trim context | six or more replies, resent history a third of the bill or more | |
+| trim context | six or more replies, resent history a third of the bill or more, and the model has no prompt cache | |
 | review | the task could not be tagged, or business use is unsure | |
 
 Cost: a chat API is sent the whole conversation every turn, so a reply's input is everything
-before it and a long conversation costs roughly the square of its length. Output tokens come
-from the data; input tokens are estimated at four characters a token. `finops/pricing.py`
-holds list prices per model; edit it for your contracts.
+before it and a long conversation costs roughly the square of its length. Savings per action
+add up: a downgrade's caching figure is priced on the small model, not twice.
+
+## Prices and token usage
+
+Prices live in [`finops/prices.toml`](finops/prices.toml): per model, `input`, `output`,
+`cached_input` (leave it out where there is no prompt cache) and `discount` (your contracted
+discount off list, 0 to 1), plus the table's `currency` and the `small_model` downgrades are
+priced on. A model matches the longest key its name starts with. Copy the file and pass it:
+
+```toml
+[settings]
+currency = "USD"
+small_model = "gpt-4.1-mini"
+
+[models."gpt-4.1"]
+input = 2.00
+output = 8.00
+cached_input = 0.50
+discount = 0.15
+```
+
+```bash
+uv run finops report data/wildchat.jsonl --prices mine.toml --save data/findings.json
+uv run finops reprice data/findings.json --prices other.toml    # what-if, no model calls
+```
+
+Token counts come from the log where it has them. An assistant turn may carry the provider's
+own `usage`, as the OpenAI and Anthropic APIs return it:
+
+```json
+{"role": "assistant", "content": "...", "usage": {"input_tokens": 1300, "output_tokens": 90, "cached_tokens": 1024}}
+```
+
+Then input, cached and output tokens are used as billed, cached tokens are priced at
+`cached_input`, and FOCUS gets a cached-input row. Without `usage`, output tokens come from the
+turn's `tokens` (WildChat records them) or its length, input is the history before the reply at
+four characters a token, and nothing is cached. **WildChat records no input or cache counts**,
+so on it every input figure is an estimate and caching shows up only as a recommendation. Logs
+from your own gateway (LiteLLM, Helicone, an OpenAI proxy) carry `usage` per call; the
+[Chutes trace](https://github.com/HarvardMadSys/chutes_workload) has real cached-token counts
+but no text to tag.
 
 ## A thousand real conversations
 
@@ -205,7 +248,7 @@ Jev, then `finops html`:
 
 | | |
 |---|---|
-| spend | $7.84 at list prices |
+| spend | $7.84 at list prices, 4.05M input tokens (estimated) and 0.53M output |
 | tag coverage (share of spend) | task, domain, data_class 100%; subtask 99.8%; workload 80%; environment 77%; fully tagged 64% |
 | largest tasks by spend | writing 24%, code 19%, creative 18%, research 17% |
 | apps found | 44 templated programs |

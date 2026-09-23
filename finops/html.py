@@ -27,13 +27,17 @@ def _row(f: Any, text: str | None) -> dict[str, Any]:
         "month": (d.get("timestamp") or "")[:7] or None,
         "replies": d["turns"],
         "usd": c["usd"],
+        "contracted": c.get("contracted_usd", c["usd"]),
         "in": c["input_tokens"],
+        "cached": c.get("cached_tokens", 0),
         "out": c["output_tokens"],
+        "measured": bool(c.get("input_measured")),
         "tags": d["tags"],
         "source": d.get("tag_source") or {k: ("code" if k == "app" else "inferred") for k in d["tags"]},
         "business": d["business"],
         "actions": d["actions"],
         "savings": d["savings_usd"],
+        "act_save": d.get("action_savings") or {},
         "gates": {k: {"value": g["value"], "outcome": g["outcome"], "trace": "; ".join(g.get("trace") or [])} for k, g in gates.items() if not k.startswith("_")},
         **({"text": text} if text else {}),
     }
@@ -229,7 +233,9 @@ function load(k) { try { return localStorage.getItem(k); } catch (e) { return nu
   const biz = rows.filter((r) => r.business === true).reduce((s, r) => s + r.usd, 0);
   const ms = rows.map((r) => r.month).filter(Boolean).sort();
   const mon = (k) => new Date(k + "-01T00:00:00").toLocaleString("en", { month: "short", year: "numeric" });
-  const items = [["Spend", fmt(total)], ["Conversations", rows.length.toLocaleString("en")], ...(ms.length ? [["Period", mon(ms[0]) + " to " + mon(ms[ms.length - 1]), "txt"]] : []), ["Fully tagged", pct(tagged)], ["Business use", pct(biz)], ["Savings found", fmt(saved) + " (" + pct(saved) + ")", "good"]];
+  const tin = rows.reduce((s, r) => s + r.in, 0), tc = rows.reduce((s, r) => s + r.cached, 0), tout = rows.reduce((s, r) => s + r.out, 0);
+  const short = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+  const items = [["Spend", fmt(total)], ["Tokens", `${short(tin)} in${tc ? ", " + short(tc) + " cached" : ""}, ${short(tout)} out`, "txt"], ["Conversations", rows.length.toLocaleString("en")], ...(ms.length ? [["Period", mon(ms[0]) + " to " + mon(ms[ms.length - 1]), "txt"]] : []), ["Fully tagged", pct(tagged)], ["Business use", pct(biz)], ["Savings found", fmt(saved) + " (" + pct(saved) + ")", "good"]];
   document.getElementById("statement").innerHTML = items.map(([k, v, c]) => `<div><dt>${k}</dt><dd class="num ${c || ""}">${v}</dd></div>`).join("");
   const models = new Set(rows.map((r) => r.model)).size;
   document.getElementById("lede").textContent = `${rows.length.toLocaleString("en")} conversations across ${models} models, tagged by ${DATA.backend || "a decision model"}${DATA.source ? " from " + DATA.source : ""}. Pick the tags to group by; click a group to see its conversations.`;
@@ -347,10 +353,11 @@ function pick(k) { filter = filter === k ? null : k; draw(); document.getElement
 // ---- actions
 const ACT = { "policy": ["var(--crit)", "Spend with no business use"], "hold": ["var(--crit)", "Sensitive data: a person decides first"], "downgrade": ["var(--good)", "A small model would do"],
   "dev/test on a premium model": ["var(--good)", "Testing on a premium model"], "cache or template": ["var(--accent)", "A common request: cache or template it"],
+  "prompt caching": ["var(--good)", "History resent every turn: a prompt cache serves it cheaper"],
   "trim context": ["var(--accent)", "Long conversation resending its history"], "review": ["var(--warn)", "Could not be tagged: a person reviews"] };
 (function () {
   const m = new Map();
-  for (const r of rows) r.actions.forEach((a, j) => { const h = actHead(a); const x = m.get(h) || { n: 0, save: 0 }; x.n++; if (j === 0) x.save += r.savings; m.set(h, x); });
+  for (const r of rows) r.actions.forEach((a, j) => { const h = actHead(a); const x = m.get(h) || { n: 0, save: 0 }; x.n++; x.save += r.act_save[h] || 0; m.set(h, x); });
   document.getElementById("actions").innerHTML = [...m.entries()].sort((a, b) => b[1].save - a[1].save || b[1].n - a[1].n).map(([h, x]) => {
     const [c, what] = ACT[h] || ["var(--muted)", h];
     return `<div class="act" style="--c:${c}"><span class="dot"></span><span><b>${esc(h)}</b> <span style="color:var(--muted)">${what}</span></span><span class="num">${x.n}${x.save ? ", " + fmt(x.save) : ""}</span></div>`;
@@ -377,13 +384,14 @@ function toggle(tr) {
   const d = document.createElement("tr"); d.className = "detail";
   d.innerHTML = `<td colspan="6"><div style="display:grid;gap:10px">
     ${r.text ? `<div>${esc(r.text)}</div>` : ""}
-    <div class="fig">${r.in.toLocaleString()} tokens in, ${r.out.toLocaleString()} out. Business use: ${r.business === null ? "unsure" : r.business ? "yes" : "no"}.${r.savings ? " Saves " + fmt(r.savings) + "." : ""}</div>
+    <div class="fig">${r.in.toLocaleString()} tokens in${r.cached ? " (" + r.cached.toLocaleString() + " from cache)" : ""}, ${r.out.toLocaleString()} out${r.measured ? "" : ", input estimated"}. Business use: ${r.business === null ? "unsure" : r.business ? "yes" : "no"}.${r.savings ? " Saves " + fmt(r.savings) + "." : ""}</div>
     <div>${r.actions.map((a) => esc(a)).join("<br>") || "No action."}</div>
     <div class="trace">${gates}</div></div></td>`;
   tr.after(d);
 }
 
-document.getElementById("foot").innerHTML = `Tagged ${DATA.date}${DATA.backend ? " by " + esc(DATA.backend) : ""}. Spend is tokens times list prices; input tokens are estimated at four characters a token. ` +
+const measured = rows.filter((r) => r.measured).length;
+document.getElementById("foot").innerHTML = `Tagged ${DATA.date}${DATA.backend ? " by " + esc(DATA.backend) : ""}. Spend is tokens times list prices from the price table; ${measured === rows.length ? "token counts are the provider's own" : measured ? `${measured.toLocaleString("en")} conversations carry the provider's token counts, the rest are estimated at four characters a token` : "the log records no input or cache counts, so input tokens are estimated at four characters a token and nothing counts as cached"}. ` +
   `A tag below the circuit's confidence floor is <i>untagged</i>, never guessed. Conversation text is not included. Built with finops-circuit on decision circuits.`;
 draw();
 </script>

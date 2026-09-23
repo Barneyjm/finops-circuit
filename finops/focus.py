@@ -1,15 +1,16 @@
 """Findings as a FOCUS 1.4 Cost and Usage dataset (https://focus.finops.org), in CSV.
 
-Each conversation is two usage charges: its input tokens and its output tokens, priced
-separately, so each is its own SKU and row. The mapping:
+Each conversation is a usage charge per kind of token: input, cached input (when any was
+read from a prompt cache) and output, each priced separately, so each is its own SKU and row.
+The mapping:
 
     ServiceCategory / ServiceSubcategory   AI and Machine Learning / Generative AI
     ServiceProviderName, HostProviderName, InvoiceIssuerName   the model's vendor (OpenAI for gpt-*, o1-*)
     ChargeCategory "Usage", ChargeClass null, ChargeFrequency "Usage-Based", PricingCategory "Standard"
     ConsumedQuantity / ConsumedUnit        tokens / "Tokens"
     PricingQuantity / PricingUnit          tokens / 1e6 / "1000000 Tokens"
-    ListUnitPrice, ContractedUnitPrice     the price table's USD per million tokens
-    ListCost = ContractedCost = EffectiveCost = BilledCost   list prices, no discounts known
+    ListUnitPrice, ContractedUnitPrice     the price table's list price, and after its contract discount
+    ListCost; ContractedCost = EffectiveCost = BilledCost    list, then after the discount (prices.toml)
     ChargePeriodStart/End                  the hour of the conversation; BillingPeriod its month
     ResourceId / ResourceName / ResourceType   the conversation / its app / "Conversation"
     SkuId, SkuPriceId, SkuMeter            "<model>/input-tokens" and so on
@@ -32,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from .circuit import UNTAGGED
-from .pricing import price_of
+from .pricing import PriceTable, default_prices
 
 TAG_PREFIX = "finops-circuit/"
 NOT_APPLICABLE = "n/a"
@@ -79,21 +80,23 @@ def _tags(tags: dict[str, str], source: dict[str, str]) -> str:
     return json.dumps(out, ensure_ascii=False, sort_keys=True)
 
 
-def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: str = "LLM usage", prices: dict | None = None) -> list[dict[str, Any]]:
-    """Two FOCUS rows per finding: input tokens, then output tokens."""
+def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: str = "LLM usage", prices: PriceTable | None = None) -> list[dict[str, Any]]:
+    """FOCUS rows per finding: input tokens, cached input tokens (when there are any), output tokens."""
+    table = prices or default_prices()
     out = []
     for f in findings:
         d = asdict(f) if not isinstance(f, dict) else f
         c, model = d["cost"], d["model"]
         who = vendor(model)
-        p_in, p_out = price_of(model, prices)
+        price = table.of(model)
         c_start, c_end, b_start, b_end = _periods(d.get("timestamp"))
         source = d.get("tag_source") or {k: ("code" if k == "app" else "inferred") for k in d["tags"]}
+        currency = c.get("currency", table.currency)
         shared = {
             "BillingAccountId": account_id,
             "BillingAccountName": account_name,
-            "BillingCurrency": "USD",
-            "PricingCurrency": "USD",
+            "BillingCurrency": currency,
+            "PricingCurrency": currency,
             "BillingPeriodStart": b_start,
             "BillingPeriodEnd": b_end,
             "ChargePeriodStart": c_start,
@@ -119,29 +122,34 @@ def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: st
             "x_Actions": json.dumps(d["actions"], ensure_ascii=False),
             "x_BusinessUse": "" if d["business"] is None else str(bool(d["business"])).lower(),
         }
-        for direction, tokens, price, estimated in (
-            ("input", c["input_tokens"], p_in, True),  # input tokens are estimated from characters
-            ("output", c["output_tokens"], p_out, c["output_measured"] < c["output_tokens"]),
-        ):
-            cost = tokens * price / 1e6
+        cached = c.get("cached_tokens", 0)
+        input_measured = c.get("input_measured", False)
+        charges = [("input", c["input_tokens"] - cached, price.input, not input_measured)]
+        if cached:
+            charges.append(("cached-input", cached, price.cached_input if price.cached_input is not None else price.input, not input_measured))
+        charges.append(("output", c["output_tokens"], price.output, c["output_measured"] < c["output_tokens"]))
+        for i, (kind, tokens, unit, estimated) in enumerate(charges):
+            list_cost = tokens * unit / 1e6
+            contracted = list_cost * (1 - price.discount)
+            last = i == len(charges) - 1
             out.append(
                 shared
                 | {
-                    "ChargeDescription": f"{model} {direction} tokens",
+                    "ChargeDescription": f"{model} {kind.replace('-', ' ')} tokens",
                     "ConsumedQuantity": tokens,
                     "PricingQuantity": tokens / 1e6,
-                    "ListUnitPrice": price,
-                    "ContractedUnitPrice": price,
-                    "ListCost": cost,
-                    "ContractedCost": cost,
-                    "EffectiveCost": cost,
-                    "BilledCost": cost,
-                    "SkuId": f"{model}/{direction}-tokens",
-                    "SkuPriceId": f"{model}/{direction}-tokens/list-{price:g}",
-                    "SkuMeter": f"{direction.title()} Tokens",
+                    "ListUnitPrice": unit,
+                    "ContractedUnitPrice": unit * (1 - price.discount),
+                    "ListCost": list_cost,
+                    "ContractedCost": contracted,
+                    "EffectiveCost": contracted,
+                    "BilledCost": contracted,
+                    "SkuId": f"{model}/{kind}-tokens",
+                    "SkuPriceId": f"{model}/{kind}-tokens/list-{unit:g}" + (f"/discount-{price.discount:g}" if price.discount else ""),
+                    "SkuMeter": f"{kind.replace('-', ' ').title()} Tokens",
                     "x_QuantityEstimated": str(estimated).lower(),
-                    # the whole conversation's potential savings sit on its output row, so they sum once
-                    "x_PotentialSavings": d["savings_usd"] if direction == "output" else 0.0,
+                    # the conversation's potential savings sit on its last row, so they sum once
+                    "x_PotentialSavings": d["savings_usd"] if last else 0.0,
                 }
             )
     return out

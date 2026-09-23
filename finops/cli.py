@@ -6,6 +6,7 @@ finops report data/wildchat.jsonl --backend jev --by task,subtask  # spend group
 finops report data/wildchat.jsonl --backend jev --save data/findings.json
 finops html data/findings.json --out report.html        # the dashboard, one self-contained file
 finops focus data/findings.json --out focus.csv          # the same spend as a FOCUS 1.4 dataset
+finops reprice data/findings.json --prices my-prices.toml  # the saved findings under new prices, no model calls
 finops diagram                                          # the circuit as Mermaid
 """
 
@@ -18,24 +19,25 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from .agent import analyze, report, tag_keys
+from .agent import analyze, report, reprice, tag_keys
 from .backends import BACKENDS, V2_BACKENDS, pick_backend
 from .circuit import build_circuit, load_taxonomy
 from .conversations import fetch_wildchat, load
 from .focus import write_csv
 from .html import document, render
+from .pricing import load_prices
 from .tags import app_ids, app_labels
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="finops", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["fetch", "analyze", "report", "html", "focus", "diagram"])
+    ap.add_argument("command", choices=["fetch", "analyze", "report", "html", "focus", "reprice", "diagram"])
     ap.add_argument("path", nargs="?", default="samples")
     ap.add_argument("--backend", default="jev", help=", ".join(BACKENDS))
     ap.add_argument("--model", default=None)
     ap.add_argument("--n", type=int, default=200, help="fetch: how many conversations")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default=None, help="fetch: data/wildchat.jsonl; html: report.html")
+    ap.add_argument("--out", default=None, help="fetch: data/wildchat.jsonl; html: report.html; reprice: the findings file itself")
     ap.add_argument("--save", default=None, help="report: also write the findings (audit included) to this JSON file, for `finops html`")
     ap.add_argument("--with-text", action="store_true", help="html: include each conversation's first message (left out by default)")
     ap.add_argument("--workers", type=int, default=4, help="conversations analyzed at once")
@@ -43,11 +45,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--account-name", default=None)
     ap.add_argument("--json", action="store_true", help="print full findings, audit included")
     ap.add_argument("--by", default=None, help="report: comma-separated tag keys to group spend by (any taxonomy tag, app, or a declared tag)")
+    ap.add_argument("--prices", default=None, help="a price table TOML (default: finops/prices.toml)")
     ap.add_argument("--taxonomy", default=None, help="a tag taxonomy TOML (default: finops/taxonomy.toml)")
     ap.add_argument("--v2", action=argparse.BooleanOptionalAction, default=None, help=f"ask the circuit v2 questions (default: on for {', '.join(V2_BACKENDS)})")
     args = ap.parse_args(argv)
     v2 = args.v2 if args.v2 is not None else args.backend in V2_BACKENDS
     taxonomy = load_taxonomy(args.taxonomy)
+    prices = load_prices(args.prices)
 
     if args.command == "diagram":
         print(build_circuit(taxonomy, v2).to_mermaid())
@@ -62,8 +66,22 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "focus":
         saved = json.loads(Path(args.path).read_text())
         out = Path(args.out or "focus.csv")
-        n = write_csv(saved["findings"], out, account_id=args.account, account_name=args.account_name or args.account)
-        print(f"wrote {n} FOCUS 1.4 rows ({len(saved['findings'])} conversations, input and output tokens each) to {out}")
+        n = write_csv(saved["findings"], out, account_id=args.account, account_name=args.account_name or args.account, prices=prices)
+        print(f"wrote {n} FOCUS 1.4 rows ({len(saved['findings'])} conversations: input, cached input when any, and output tokens) to {out}")
+        return
+    if args.command == "reprice":
+        saved = json.loads(Path(args.path).read_text())
+        convs = {c["id"]: c for c in load(saved["source"])}
+        missing = [r["id"] for r in saved["findings"] if r["id"] not in convs]
+        if missing:
+            raise SystemExit(f"{len(missing)} findings have no conversation in {saved['source']}; reprice needs the data they were analyzed from")
+        findings = [reprice(r, convs[r["id"]], taxonomy=taxonomy, prices=prices) for r in saved["findings"]]
+        by = tuple(k.strip() for k in (args.by or taxonomy.top[0].name).split(",") if k.strip())
+        print(json.dumps(report(findings, by, saved.get("apps")), indent=1))
+        out = Path(args.out or args.path)
+        rows = [asdict(f) | {"first_message": r.get("first_message", "")} for f, r in zip(findings, saved["findings"], strict=True)]
+        out.write_text(json.dumps(saved | {"findings": rows}, ensure_ascii=False, default=str))
+        print(f"repriced {len(rows)} findings into {out}", file=sys.stderr)
         return
     if args.command == "html":
         saved = json.loads(Path(args.path).read_text())
@@ -85,7 +103,7 @@ def main(argv: list[str] | None = None) -> None:
 
     def one(conv):
         try:
-            return analyze(conv, backend, model=args.model, circuit=circuit, taxonomy=taxonomy, app=apps[conv["id"]])
+            return analyze(conv, backend, model=args.model, circuit=circuit, taxonomy=taxonomy, app=apps[conv["id"]], prices=prices)
         except Exception as e:
             print(f"   {conv.get('file', conv['id'])}: skipped ({type(e).__name__}: {str(e)[:120]})", file=sys.stderr)
             return None

@@ -1,0 +1,71 @@
+# Prices per million tokens. Copy this file, change it, and pass it with --prices.
+#
+# A model is matched by the longest key its name starts with ("gpt-4o-2024-08-06" beats
+# "gpt-4o"). `input` and `output` are list prices; `cached_input` is the price of input tokens
+# read from the provider's prompt cache (leave it out where there is no cache); `discount` is
+# your contracted discount off list, 0 to 1, which FOCUS reports as ContractedCost and
+# EffectiveCost beside ListCost. These are launch list prices in USD: check them against your
+# contract.
+
+[settings]
+currency = "USD"
+small_model = "gpt-4o-mini"   # the model a downgrade is priced on
+
+[models."gpt-3.5-turbo"]
+input = 1.50
+output = 2.00
+
+[models."gpt-4"]
+input = 30.00
+output = 60.00
+
+[models."gpt-4-1106"]
+input = 10.00
+output = 30.00
+
+[models."gpt-4-0125"]
+input = 10.00
+output = 30.00
+
+[models."gpt-4-turbo"]
+input = 10.00
+output = 30.00
+
+[models."gpt-4o"]
+input = 5.00
+output = 15.00
+
+[models."gpt-4o-2024-08-06"]
+input = 2.50
+output = 10.00
+cached_input = 1.25
+
+[models."gpt-4o-2024-11-20"]
+input = 2.50
+output = 10.00
+cached_input = 1.25
+
+[models."gpt-4o-mini"]
+input = 0.15
+output = 0.60
+cached_input = 0.075
+
+[models."gpt-4.1"]
+input = 2.00
+output = 8.00
+cached_input = 0.50
+
+[models."gpt-4.1-mini"]
+input = 0.40
+output = 1.60
+cached_input = 0.10
+
+[models."o1"]
+input = 15.00
+output = 60.00
+cached_input = 7.50
+
+[models."o1-mini"]
+input = 3.00
+output = 12.00
+cached_input = 1.50
