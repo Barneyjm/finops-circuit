@@ -21,7 +21,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .agent import analyze, report, reprice, tag_keys
-from .backends import BACKENDS, V2_BACKENDS, pick_backend
+from .backends import BACKENDS, V1_MODELS, V2_BACKENDS, pick_backend, speaks_v2
 from .circuit import build_circuit, load_taxonomy
 from .conversations import fetch_wildchat, load
 from .focus import write_csv
@@ -48,9 +48,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--by", default=None, help="report: comma-separated tag keys to group spend by (any taxonomy tag, app, or a declared tag)")
     ap.add_argument("--prices", default=None, help="a price table TOML (default: finops/prices.toml)")
     ap.add_argument("--taxonomy", default=None, help="a tag taxonomy TOML (default: finops/taxonomy.toml)")
-    ap.add_argument("--v2", action=argparse.BooleanOptionalAction, default=None, help=f"ask the circuit v2 questions (default: on for {', '.join(V2_BACKENDS)})")
+    ap.add_argument("--v2", action=argparse.BooleanOptionalAction, default=None, help=f"ask the circuit v2 questions (default: on for {', '.join(V2_BACKENDS)}, not for {', '.join(V1_MODELS)})")
     args = ap.parse_args(argv)
-    v2 = args.v2 if args.v2 is not None else args.backend in V2_BACKENDS
+    v2 = args.v2 if args.v2 is not None else speaks_v2(args.backend, args.model)
     taxonomy = load_taxonomy(args.taxonomy)
     prices = load_prices(args.prices)
 

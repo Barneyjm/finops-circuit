@@ -64,6 +64,12 @@ class FakeBackend:
 
 
 V2_BACKENDS = ("circuits", "local", "fake")  # the ones that answer multi and locate
+V1_MODELS = ("circuit-8b",)  # served by those backends on v1 weights: no multi or locate yet
+
+
+def speaks_v2(backend: str, model: str | None) -> bool:
+    """Whether to ask the v2 questions by default: a v2 backend, and not a v1 model on it."""
+    return backend.lower() in V2_BACKENDS and not (model or "").startswith(V1_MODELS)
 
 
 def pick_backend(name: str, model: str | None = None) -> Any:

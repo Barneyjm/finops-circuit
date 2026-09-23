@@ -340,3 +340,10 @@ def test_findings_saved_before_actions_had_keys_still_load():
     f = Finding.from_dict(old)
     assert [(a.key, a.usd) for a in f.actions] == [("downgrade", 0.005), ("cache or template", 0.0)] and f.savings_usd == 0.005
     assert f.tag_source == {"app": "code", "task": "inferred"} and f.cost.input_usd == pytest.approx(100 * 30 / 1e6)  # billed once on load
+
+
+def test_v2_questions_default_on_for_v2_models_only():
+    from finops.backends import speaks_v2
+
+    assert speaks_v2("circuits", None) and speaks_v2("local", "circuit-1.7b")
+    assert not speaks_v2("circuits", "circuit-8b") and not speaks_v2("jev", None)
