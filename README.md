@@ -21,6 +21,57 @@ $ finops analyze samples --backend fake
    subtask      decided   subtask -> keywords p=0.85 conf=0.58 (min 0.2)
 ```
 
+## How it fits together
+
+```mermaid
+flowchart LR
+  subgraph IN["Conversations in"]
+    WC["WildChat-4.8M<br/>(HF datasets server)"]
+    LOGS["Your own LLM logs<br/>+ declared tags<br/>(API key, project)"]
+  end
+
+  FETCH["conversations.py<br/>fetch + normalise<br/>keeps model, time, turns, tokens<br/>drops location, IP, headers"]
+  WC --> FETCH --> JSONL[("data/*.jsonl")]
+  LOGS --> JSONL
+
+  subgraph PER["Per conversation (agent.py)"]
+    PRICE["pricing.py<br/>tokens x price table<br/>history resent every turn"]
+    S1["Stage 1 circuit<br/>task, domain, environment,<br/>workload, data_class,<br/>work, complexity, small_model_ok, repeatable"]
+    S2["Stage 2 circuit<br/>subtask of the tagged task only"]
+    GATES["Gates, evaluated in the SDK<br/>argmax with confidence floor -> tag or untagged<br/>policy / downgrade / cache / hold / dev_test"]
+    MERGE["Declared tags win,<br/>inferred fill the gaps<br/>-> tags, tag_source, actions, savings"]
+  end
+
+  TAGS["tags.py<br/>app = prompt-template fingerprint<br/>across the whole set (code, no model)"]
+
+  subgraph BE["Swappable backend (one flag)"]
+    JEV["Jev (TypeSafe)"]
+    CIR["circuit-1.7b<br/>Modal / home tier / local"]
+    CHAT["OpenAI / Anthropic"]
+    FAKE["fake<br/>(hand-written answers)"]
+  end
+
+  JSONL --> PRICE & S1 & TAGS
+  S1 -- "one request" --> BE
+  BE -- "calibrated probabilities" --> GATES
+  GATES --> S2
+  S2 -- "one request" --> BE
+  PRICE --> MERGE
+  TAGS --> MERGE
+  GATES --> MERGE
+  MERGE --> FIND[("findings.json<br/>with audit: answers + gate traces")]
+
+  FIND --> REP["report<br/>spend by any tags, by month,<br/>tag coverage, savings"]
+  FIND --> HTML["html.py<br/>self-contained dashboard"]
+  HTML --> OUT["report.html / Artifact"]
+  S1 -. "OpenTelemetry spans" .-> OTEL["Jaeger / any OTLP backend"]
+```
+
+The model answers questions; everything it feeds is code. Pricing never sees the model's
+answers, the `app` tag never sees the model, and the gates run in the decision-circuits SDK
+on the client, the same arithmetic whichever backend answered (and proved in Lean in that
+repo).
+
 ## Run it
 
 ```bash
