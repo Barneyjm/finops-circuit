@@ -3,7 +3,7 @@ name = "finops-circuit"
 version = "0.1.0"
 description = "An LLM FinOps agent on decision circuits: what each conversation cost, what it was worth, and what to change"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = ["decision-circuits>=0.5.4"]
 
@@ -23,7 +23,7 @@ packages = ["finops"]
 
 [tool.ruff]
 line-length = 200
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

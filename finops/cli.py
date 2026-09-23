@@ -5,6 +5,7 @@ finops analyze samples/02_sql_debug.json --backend jev          # one conversati
 finops report data/wildchat.jsonl --backend jev --by task,subtask  # spend grouped by tags, coverage, savings
 finops report data/wildchat.jsonl --backend jev --save data/findings.json
 finops html data/findings.json --out report.html        # the dashboard, one self-contained file
+finops focus data/findings.json --out focus.csv          # the same spend as a FOCUS 1.4 dataset
 finops diagram                                          # the circuit as Mermaid
 """
 
@@ -17,17 +18,18 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from .agent import TAG_KEYS, analyze, report
+from .agent import analyze, report, tag_keys
 from .backends import BACKENDS, V2_BACKENDS, pick_backend
-from .circuit import build_circuit
+from .circuit import build_circuit, load_taxonomy
 from .conversations import fetch_wildchat, load
+from .focus import write_csv
 from .html import document, render
 from .tags import app_ids, app_labels
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="finops", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["fetch", "analyze", "report", "html", "diagram"])
+    ap.add_argument("command", choices=["fetch", "analyze", "report", "html", "focus", "diagram"])
     ap.add_argument("path", nargs="?", default="samples")
     ap.add_argument("--backend", default="jev", help=", ".join(BACKENDS))
     ap.add_argument("--model", default=None)
@@ -37,14 +39,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--save", default=None, help="report: also write the findings (audit included) to this JSON file, for `finops html`")
     ap.add_argument("--with-text", action="store_true", help="html: include each conversation's first message (left out by default)")
     ap.add_argument("--workers", type=int, default=4, help="conversations analyzed at once")
+    ap.add_argument("--account", default="llm-usage", help="focus: BillingAccountId (BillingAccountName is the same unless --account-name)")
+    ap.add_argument("--account-name", default=None)
     ap.add_argument("--json", action="store_true", help="print full findings, audit included")
-    ap.add_argument("--by", default="task", help=f"report: comma-separated tag keys to group spend by ({', '.join(TAG_KEYS)})")
+    ap.add_argument("--by", default=None, help="report: comma-separated tag keys to group spend by (any taxonomy tag, app, or a declared tag)")
+    ap.add_argument("--taxonomy", default=None, help="a tag taxonomy TOML (default: finops/taxonomy.toml)")
     ap.add_argument("--v2", action=argparse.BooleanOptionalAction, default=None, help=f"ask the circuit v2 questions (default: on for {', '.join(V2_BACKENDS)})")
     args = ap.parse_args(argv)
     v2 = args.v2 if args.v2 is not None else args.backend in V2_BACKENDS
+    taxonomy = load_taxonomy(args.taxonomy)
 
     if args.command == "diagram":
-        print(build_circuit(v2).to_mermaid())
+        print(build_circuit(taxonomy, v2).to_mermaid())
         return
     if args.command == "fetch":
         out = Path(args.out or "data/wildchat.jsonl")
@@ -52,6 +58,12 @@ def main(argv: list[str] | None = None) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in convs))
         print(f"wrote {len(convs)} conversations to {out} (WildChat-4.8M, ODC-BY: attribute AI2 when you publish from it)")
+        return
+    if args.command == "focus":
+        saved = json.loads(Path(args.path).read_text())
+        out = Path(args.out or "focus.csv")
+        n = write_csv(saved["findings"], out, account_id=args.account, account_name=args.account_name or args.account)
+        print(f"wrote {n} FOCUS 1.4 rows ({len(saved['findings'])} conversations, input and output tokens each) to {out}")
         return
     if args.command == "html":
         saved = json.loads(Path(args.path).read_text())
@@ -63,16 +75,17 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     backend = pick_backend(args.backend, args.model)
-    circuit = build_circuit(v2)
+    circuit = build_circuit(taxonomy, v2)
     convs = load(args.path)
-    by = tuple(k.strip() for k in args.by.split(",") if k.strip())
-    if unknown := [k for k in by if k not in TAG_KEYS]:
-        raise SystemExit(f"--by: unknown tag keys {unknown}; use {', '.join(TAG_KEYS)}")
+    by = tuple(k.strip() for k in (args.by or taxonomy.top[0].name).split(",") if k.strip())
+    known = set(tag_keys(taxonomy)) | {str(k) for c in convs for k in (c.get("tags") or {})}
+    if unknown := [k for k in by if k not in known]:
+        raise SystemExit(f"--by: unknown tag keys {unknown}; use {', '.join(sorted(known))}")
     apps = app_ids(convs)  # a template shows only across conversations, so the whole set is fingerprinted first
 
     def one(conv):
         try:
-            return analyze(conv, backend, model=args.model, circuit=circuit, app=apps[conv["id"]])
+            return analyze(conv, backend, model=args.model, circuit=circuit, taxonomy=taxonomy, app=apps[conv["id"]])
         except Exception as e:
             print(f"   {conv.get('file', conv['id'])}: skipped ({type(e).__name__}: {str(e)[:120]})", file=sys.stderr)
             return None
@@ -105,11 +118,11 @@ def _line(conv, f) -> str:
     lines = [
         f"\n== {conv.get('file', f.id)}  {f.model}, {f.turns} replies, ${f.cost.usd:.4f}  ({f.cost.input_tokens} in / {f.cost.output_tokens} out)",
         f"   {head}",
-        "-> " + " ".join(f"{k}={f.tags[k]}" for k in TAG_KEYS),
+        "-> " + " ".join(f"{k}={v}" for k, v in f.tags.items()),
         f"   business={f.business} saves ${f.savings_usd:.4f} | small model ok {a['small_model_ok']:.2f} | repeatable {a['repeatable']:.2f}",
     ]
     lines += [f"   * {x}" for x in f.actions] or ["   * no action"]
-    for gid in ("task", "subtask", "environment", "data_class", "downgrade"):
+    for gid in [*(k for k in f.tags if k != "app"), "downgrade"]:
         g = f.audit["gates"].get(gid)
         if g:
             lines.append(f"   {gid:12s} {g['outcome']:9s} {'; '.join(g['trace'] or [])[:140]}")

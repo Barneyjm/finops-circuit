@@ -88,6 +88,7 @@ uv run finops report data/wildchat.jsonl --backend jev --by task,subtask
 | `finops analyze <file or dir>` | per conversation: tags, cost, actions, the gate traces |
 | `finops report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
 | `finops report ... --save findings.json` then `finops html findings.json` | the dashboard: one self-contained HTML file (conversation text left out unless `--with-text`) |
+| `finops focus findings.json --out focus.csv` | the same spend as a FOCUS 1.4 Cost and Usage dataset |
 | `finops diagram` | the circuit as Mermaid |
 
 `--backend` picks the model, as in [call-center-circuit](https://github.com/Barneyjm/call-center-circuit):
@@ -121,6 +122,62 @@ open with, going on to say different things, is one app. The same message sent m
 {"environment": "dev_test", "app": "billing-service"}`, from an API key, a project, a header)
 keeps them; the circuit fills the gaps, and `tag_source` says which is which. Environment
 especially belongs in metadata: whether traffic is a test is rarely in its text.
+
+## Your own tags
+
+The tags are a TOML file, `finops/taxonomy.toml` by default; copy it and pass `--taxonomy`.
+
+```toml
+[tags.team]
+question = "Which team would own this work?"
+[tags.team.options]
+growth = "Marketing and sales"
+platform = "Engineering"
+
+[tags.stage]                       # a child: asked in a second request, only for the value team got
+parent = "team"
+question = "Which {parent} activity?"
+[tags.stage.options.platform]
+build = "Building"
+run = "Running"
+
+[actions]                          # point the built-in actions at any tag values
+hold = { risk = ["high"] }
+dev_test = { environment = ["dev_test"] }
+```
+
+Every tag is a question and a gate; the first tag is the primary one (a conversation it cannot
+tag goes to review, and reports group by it unless told otherwise). A child tag whose parent
+has no options for it is `n/a`, not `untagged`. Tags a conversation declares need not be in the
+taxonomy at all: `"tags": {"cost_center": "cc-4411", "team": "growth"}` passes `cost_center`
+through to the report, the dashboard and FOCUS, and a declared `team` wins over the inferred
+one. The file is checked on load: a parent that is not a tag, an action value that is not an
+option, or a tag named `app` (set in code) is refused.
+
+## FOCUS
+
+`finops focus` writes the findings as a [FOCUS 1.4](https://focus.finops.org) Cost and Usage
+dataset, so LLM spend loads into the same FinOps tools as cloud bills. Each conversation is two
+usage rows, input tokens and output tokens, since they are priced separately:
+
+| column | value |
+|---|---|
+| ServiceCategory / ServiceSubcategory | AI and Machine Learning / Generative AI |
+| ServiceProviderName, HostProviderName, InvoiceIssuerName | the model's vendor |
+| ChargeCategory, ChargeFrequency, PricingCategory | Usage, Usage-Based, Standard |
+| ConsumedQuantity / ConsumedUnit | tokens / `Tokens` |
+| PricingQuantity / PricingUnit | tokens / 1e6 / `1000000 Tokens` |
+| ListCost = ContractedCost = EffectiveCost = BilledCost | tokens x list price |
+| ChargePeriodStart/End, BillingPeriodStart/End | the conversation's hour, its month |
+| ResourceId / ResourceName / ResourceType | the conversation / its app / `Conversation` |
+| SkuId, SkuPriceId, SkuMeter | `<model>/input-tokens`, its list price, `Input Tokens` |
+| Tags | declared tags as given; inferred and code tags under the `finops-circuit/` prefix |
+| x_ columns | tag sources, whether a quantity is estimated, actions, potential savings |
+
+FOCUS wants one prefix-free user tag scheme and a prefix on every other, so what a conversation
+declares keeps its keys and what this tool infers carries `finops-circuit/`. Untagged and n/a
+values are left out of Tags. Input quantities are estimates (`x_QuantityEstimated`). Costs are
+list prices; there is no contract data to apply.
 
 ## What the report recommends
 

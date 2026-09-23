@@ -1,112 +1,25 @@
-"""The tags and the gates. This file is the whole policy.
+"""The questions and the gates, built from a tag taxonomy. `taxonomy.toml` is the default policy.
 
-Spend on LLM calls is allocated the way cloud spend is: by tags. Each conversation gets
-
-    app          which program sent it (set in code, from the prompt template; see tags.py)
-    workload     interactive (a person) or automated (a program)
-    environment  production or dev/test
-    task         what kind of work, then subtask: which kind of that work (two stages)
-    domain       the business area it serves
-    data_class   how sensitive what it carries is
-
-A model answers the tag questions with probabilities; a tag the circuit is not sure of comes
-out "untagged", as an unlabelled resource does in a cloud bill, so tag coverage is a number
-the report can give. The same request asks what a cost review needs on top: is the work hard,
-would a small model do, and is it a request many people make. Nothing here generates text.
+Spend on LLM calls is allocated the way cloud spend is: by tags. Each tag in the taxonomy is a
+question a model answers with probabilities and a gate that turns the answer into a value, or
+"untagged" when the circuit is not sure, as an unlabelled resource is in a cloud bill. A tag
+with a parent (subtask under task) is asked in a second request, only over the options for the
+value its parent got. On top of the tags, the same request asks what a cost review needs: is it
+work, how hard is it, would a small model do, is it a common request. Nothing here generates
+text.
 """
 
 from __future__ import annotations
 
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
 from decision_circuits import Circuit, Q, argmax
 
 UNTAGGED = "untagged"
-
-TASKS = {
-    "code": "Writing, fixing, explaining or reviewing software, including queries and configs",
-    "writing": "Drafting or editing prose for a reader: emails, posts, documents, copy",
-    "summarization": "Condensing given text: documents, articles, meetings, threads",
-    "translation": "Turning text from one language into another",
-    "extraction": "Pulling specific items out of given text: keywords, entities, fields, tables",
-    "classification": "Labelling given text: sentiment, topic, intent, moderation",
-    "data_analysis": "Working with numbers or data: math, statistics, spreadsheets, cleaning data",
-    "research": "Explaining a subject, comparing options, answering a factual question",
-    "advice": "Guidance on a person's own situation: health, money, relationships, decisions",
-    "creative": "Stories, role-play, poems, jokes, games",
-    "chit_chat": "Greetings and small talk with no task",
-    "other": "None of the above",
-}
-
-SUBTASKS = {
-    "code": {
-        "generate": "New code",
-        "debug": "Fix code that fails",
-        "explain": "Explain what code does",
-        "review": "Improve or critique working code",
-        "convert": "Port between languages or frameworks",
-        "sql": "Database queries",
-    },
-    "writing": {
-        "email_message": "An email or chat message",
-        "marketing_copy": "Ads, product descriptions, landing pages",
-        "social_post": "A post for a social platform",
-        "document": "A report, essay, article or proposal",
-        "rewrite": "Rephrase, shorten or correct existing text",
-        "job_application": "A resume, cover letter or interview answer",
-    },
-    "summarization": {"document": "A long document or report", "article": "An article or web page", "conversation": "A meeting, call or chat", "list_notes": "Notes into action items or bullets"},
-    "translation": {"general": "Everyday text", "technical": "Technical or legal text", "localization": "Product text adapted for a market"},
-    "extraction": {
-        "keywords": "Keywords or search terms",
-        "entities": "Names, places, dates, amounts",
-        "structured": "Fields into JSON or a table",
-        "answer_span": "The part of a text that answers a question",
-    },
-    "classification": {"sentiment": "Positive, negative or neutral", "topic": "What it is about", "intent": "What the writer wants", "moderation": "Whether it breaks a rule"},
-    "data_analysis": {
-        "math_problem": "Solve a math problem",
-        "statistics": "Statistics or probability",
-        "spreadsheet": "Spreadsheet formulas or tables",
-        "data_processing": "Clean, reshape or query a dataset",
-    },
-    "research": {"explanation": "Explain a concept or field", "comparison": "Compare options", "fact_lookup": "A specific fact", "recommendation": "Which option to choose"},
-    "advice": {"health": "Physical or mental health", "finance": "Personal money", "relationships": "Family, friends, partners", "career": "Jobs and careers", "legal": "A person's legal situation"},
-    "creative": {"story": "A story or scene", "roleplay": "Playing a character with the user", "poetry": "Poems or lyrics", "games_jokes": "Games, riddles, jokes"},
-    "chit_chat": {"greeting": "Hello and how are you", "about_the_ai": "Questions about the assistant itself", "banter": "Casual conversation"},
-    "other": {"other": "Anything else"},
-}
-
-DOMAINS = {
-    "software": "Software, data and IT",
-    "marketing_sales": "Marketing, advertising and sales",
-    "customer_support": "Serving a company's customers",
-    "finance": "Accounting, investing, banking",
-    "legal": "Law, contracts, compliance",
-    "hr_people": "Hiring, workplace, careers",
-    "education": "Studying, teaching, homework",
-    "health": "Medicine and wellbeing",
-    "operations": "Running the business: planning, vendors, admin",
-    "science_engineering": "Science and engineering outside software",
-    "media_entertainment": "Fiction, games, media",
-    "personal_life": "Everyday personal matters",
-    "other": "None of these",
-}
-
-ENVIRONMENTS = {
-    "production": "Doing a real job, by a person or by a program: the output is meant to be used, however templated",
-    "dev_test": "The content itself is a test: 'test', placeholder or dummy input, the same prompt tried several ways, attempts to get round the model's rules",
-}
-
-WORKLOADS = {
-    "interactive": "A person typing and reading the replies",
-    "automated": "A program sending templated input: fixed instructions around swapped-in content, a required output format",
-}
-
-DATA_CLASSES = {
-    "public": "Nothing that is not already public",
-    "internal": "Ordinary business content not meant for outsiders",
-    "confidential": "Business secrets, contracts, credentials, private documents",
-    "regulated": "Personal data about people, health, payment or financial account details",
-}
+DEFAULT_TAXONOMY = Path(__file__).with_name("taxonomy.toml")
 
 COMPLEXITY = [
     "Trivial: a lookup, a greeting, a one-line rewrite",
@@ -115,19 +28,72 @@ COMPLEXITY = [
     "Hard: careful multi-step reasoning, subtle bugs, expert judgment where errors are costly",
 ]
 
-TAG_QUESTIONS = {"task": TASKS, "domain": DOMAINS, "environment": ENVIRONMENTS, "workload": WORKLOADS, "data_class": DATA_CLASSES}
-MIN_TAG_CONFIDENCE = 0.2  # normalized: 1 - entropy / log(options); below it a tag is left untagged
+
+@dataclass
+class Tag:
+    name: str
+    question: str
+    options: dict[str, str] = field(default_factory=dict)  # a top-level tag's values
+    parent: str | None = None
+    by_parent: dict[str, dict[str, str]] = field(default_factory=dict)  # a child tag's values, per parent value
+    min_confidence: float = 0.2
 
 
-def build_circuit(v2: bool = False) -> Circuit:
-    """Stage one: every tag but the subtask, and the cost questions. `v2` adds `purpose` (locate:
-    the line that shows what the conversation was for) for circuit v2 models."""
+@dataclass
+class Taxonomy:
+    tags: dict[str, Tag]  # in the order they are asked and reported
+    actions: dict[str, dict[str, list[str]]]  # action -> {tag: values that trigger it}
+
+    @property
+    def top(self) -> list[Tag]:
+        return [t for t in self.tags.values() if not t.parent]
+
+    def children(self, parent: str) -> list[Tag]:
+        return [t for t in self.tags.values() if t.parent == parent]
+
+
+def load_taxonomy(path: str | Path | None = None) -> Taxonomy:
+    """Read a taxonomy TOML (see the default for the format) and check it hangs together."""
+    raw: dict[str, Any] = tomllib.loads(Path(path or DEFAULT_TAXONOMY).read_text())
+    floor = float(raw.get("settings", {}).get("min_confidence", 0.2))
+    tags: dict[str, Tag] = {}
+    for name, spec in raw.get("tags", {}).items():
+        if name == "app":
+            raise ValueError("tag 'app' is reserved: it is set in code from the prompt template")
+        parent = spec.get("parent")
+        opts = spec.get("options", {})
+        tag = Tag(name, spec["question"], parent=parent, min_confidence=float(spec.get("min_confidence", floor)))
+        if parent:
+            tag.by_parent = {k: dict(v) for k, v in opts.items()}
+        else:
+            tag.options = dict(opts)
+            if len(tag.options) < 2:
+                raise ValueError(f"tag {name!r} needs at least two options")
+        tags[name] = tag
+    for t in tags.values():
+        if t.parent and t.parent not in tags:
+            raise ValueError(f"tag {t.name!r} has parent {t.parent!r}, which is not a tag")
+        if t.parent and tags[t.parent].parent:
+            raise ValueError(f"tag {t.name!r}: only one level of parent is supported")
+        if t.parent and (unknown := set(t.by_parent) - set(tags[t.parent].options)):
+            raise ValueError(f"tag {t.name!r} has options for {sorted(unknown)}, which are not values of {t.parent!r}")
+    actions = {a: {k: list(v) for k, v in when.items()} for a, when in raw.get("actions", {}).items()}
+    for a, when in actions.items():
+        for k, values in when.items():
+            if k not in tags or tags[k].parent:
+                raise ValueError(f"action {a!r} reads tag {k!r}, which is not a top-level tag")
+            if unknown := set(values) - set(tags[k].options):
+                raise ValueError(f"action {a!r}: {sorted(unknown)} are not values of {k!r}")
+    return Taxonomy(tags, actions)
+
+
+def build_circuit(taxonomy: Taxonomy | None = None, v2: bool = False) -> Circuit:
+    """Stage one: every top-level tag and the cost questions. `v2` adds `purpose` (locate: the
+    line that shows what the conversation was for) for circuit v2 models."""
+    tx = taxonomy or load_taxonomy()
     c = Circuit()
-    c.choice("task", "What kind of work was the assistant asked to do? Pick the single best fit.", TASKS)
-    c.choice("domain", "Which area does this conversation serve?", DOMAINS)
-    c.choice("environment", "Is this doing a real job, or is the content itself a test?", ENVIRONMENTS)
-    c.choice("workload", "Was a person chatting, or a program sending templated input?", WORKLOADS)
-    c.choice("data_class", "How sensitive is the most sensitive thing in this conversation?", DATA_CLASSES)
+    for t in tx.top:
+        c.choice(t.name, t.question, t.options)
     c.noul("work", "Is this being done for a job or a business, rather than for the person themselves?", true="For work or a business", false="Personal, school or entertainment")
     c.score("complexity", "How hard is what the assistant was asked to do?", COMPLEXITY)
     c.noul(
@@ -146,26 +112,33 @@ def build_circuit(v2: bool = False) -> Circuit:
         c.locate("purpose", "Which line shows best what the person was trying to get done?", none="no line makes the purpose clear")
 
     # ---- tags: the pick, or untagged when the circuit is not sure --------------------
-    for key in TAG_QUESTIONS:
-        c.gate(key, argmax(key, min_confidence=MIN_TAG_CONFIDENCE), on_uncertain="default", default=UNTAGGED)
+    for t in tx.top:
+        c.gate(t.name, argmax(t.name, min_confidence=t.min_confidence), on_uncertain="default", default=UNTAGGED)
 
     # ---- actions ----------------------------------------------------------------------
-    # Business spend or not.
     c.gate("business", Q("work") >= 0.5, band=0.1, on_uncertain="escalate")
-    # A cheaper model, only when the work is not hard and a small model would do.
     c.gate("downgrade", (Q("small_model_ok") & ~Q("complexity")[3]) >= 0.65, band=0.1, on_uncertain="default", default=False)
-    # Cache or template it when many people ask the same thing.
     c.gate("cache", Q("repeatable") >= 0.7, band=0.1, on_uncertain="default", default=False)
-    # Sensitive data: nothing moves models or gets cached without a person looking.
-    c.gate("hold", (Q("data_class")["confidential"] | Q("data_class")["regulated"]) >= 0.5, band=0.15, on_uncertain="default", default=True)
-    # Testing on the production bill.
-    c.gate("dev_test", Q("environment")["dev_test"] >= 0.6, band=0.1, on_uncertain="default", default=False)
+    # The configured actions: "any of these tag values" as one OR over their probabilities.
+    for action, when, tau, band, default in (("hold", tx.actions.get("hold"), 0.5, 0.15, True), ("dev_test", tx.actions.get("dev_test"), 0.6, 0.1, False)):
+        refs = [Q(tag)[v] for tag, values in (when or {}).items() for v in values]
+        if refs:
+            expr = refs[0]
+            for r in refs[1:]:
+                expr = expr | r
+            c.gate(action, expr >= tau, band=band, on_uncertain="default", default=default)
     return c
 
 
-def build_subtask_circuit(task: str) -> Circuit:
-    """Stage two, for a conversation whose task was tagged: which kind of that task."""
+def build_child_circuit(tag: Tag, parent_value: str) -> Circuit | None:
+    """Stage two for one child tag, given its parent's value; None when that value has no
+    options for it."""
+    options = tag.by_parent.get(parent_value)
+    if not options:
+        return None
     c = Circuit()
-    c.choice("subtask", f"This conversation is {task.replace('_', ' ')} work. Which kind?", SUBTASKS[task])
-    c.gate("subtask", argmax("subtask", min_confidence=MIN_TAG_CONFIDENCE), on_uncertain="default", default=UNTAGGED)
+    if len(options) == 1:
+        options = {**options, "other": "None of these"}
+    c.choice(tag.name, tag.question.format(parent=parent_value.replace("_", " ")), options)
+    c.gate(tag.name, argmax(tag.name, min_confidence=tag.min_confidence), on_uncertain="default", default=UNTAGGED)
     return c

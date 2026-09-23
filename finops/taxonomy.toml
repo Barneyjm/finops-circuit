@@ -1,0 +1,136 @@
+# The default tag taxonomy. Copy it, change it, and pass it with --taxonomy.
+#
+# Every [tags.<name>] becomes a question the model answers and a tag on every conversation.
+# `options` are the values, each with the description the model reads. A tag with `parent`
+# is asked in a second request, only for the value its parent got, from `options.<parent
+# value>`; a parent value with no options there gets no child tag. Below `min_confidence`
+# (1 - entropy / log of the number of options) a tag is "untagged", never guessed.
+#
+# [actions] points the built-in FinOps actions at tags: `hold` when a tag has one of the
+# listed values, `dev_test` likewise. Leave one out and that action is off.
+#
+# Tags a conversation declares itself (conv["tags"], from an API key, a project, a header)
+# need not be listed here: they pass through to the report, the dashboard and FOCUS as they are,
+# and a declared tag that is listed here wins over the inferred one.
+
+[settings]
+min_confidence = 0.2
+
+[tags.task]
+question = "What kind of work was the assistant asked to do? Pick the single best fit."
+[tags.task.options]
+code = "Writing, fixing, explaining or reviewing software, including queries and configs"
+writing = "Drafting or editing prose for a reader: emails, posts, documents, copy"
+summarization = "Condensing given text: documents, articles, meetings, threads"
+translation = "Turning text from one language into another"
+extraction = "Pulling specific items out of given text: keywords, entities, fields, tables"
+classification = "Labelling given text: sentiment, topic, intent, moderation"
+data_analysis = "Working with numbers or data: math, statistics, spreadsheets, cleaning data"
+research = "Explaining a subject, comparing options, answering a factual question"
+advice = "Guidance on a person's own situation: health, money, relationships, decisions"
+creative = "Stories, role-play, poems, jokes, games"
+chit_chat = "Greetings and small talk with no task"
+other = "None of the above"
+
+[tags.subtask]
+parent = "task"
+question = "This conversation is {parent} work. Which kind?"
+[tags.subtask.options.code]
+generate = "New code"
+debug = "Fix code that fails"
+explain = "Explain what code does"
+review = "Improve or critique working code"
+convert = "Port between languages or frameworks"
+sql = "Database queries"
+[tags.subtask.options.writing]
+email_message = "An email or chat message"
+marketing_copy = "Ads, product descriptions, landing pages"
+social_post = "A post for a social platform"
+document = "A report, essay, article or proposal"
+rewrite = "Rephrase, shorten or correct existing text"
+job_application = "A resume, cover letter or interview answer"
+[tags.subtask.options.summarization]
+document = "A long document or report"
+article = "An article or web page"
+conversation = "A meeting, call or chat"
+list_notes = "Notes into action items or bullets"
+[tags.subtask.options.translation]
+general = "Everyday text"
+technical = "Technical or legal text"
+localization = "Product text adapted for a market"
+[tags.subtask.options.extraction]
+keywords = "Keywords or search terms"
+entities = "Names, places, dates, amounts"
+structured = "Fields into JSON or a table"
+answer_span = "The part of a text that answers a question"
+[tags.subtask.options.classification]
+sentiment = "Positive, negative or neutral"
+topic = "What it is about"
+intent = "What the writer wants"
+moderation = "Whether it breaks a rule"
+[tags.subtask.options.data_analysis]
+math_problem = "Solve a math problem"
+statistics = "Statistics or probability"
+spreadsheet = "Spreadsheet formulas or tables"
+data_processing = "Clean, reshape or query a dataset"
+[tags.subtask.options.research]
+explanation = "Explain a concept or field"
+comparison = "Compare options"
+fact_lookup = "A specific fact"
+recommendation = "Which option to choose"
+[tags.subtask.options.advice]
+health = "Physical or mental health"
+finance = "Personal money"
+relationships = "Family, friends, partners"
+career = "Jobs and careers"
+legal = "A person's legal situation"
+[tags.subtask.options.creative]
+story = "A story or scene"
+roleplay = "Playing a character with the user"
+poetry = "Poems or lyrics"
+games_jokes = "Games, riddles, jokes"
+[tags.subtask.options.chit_chat]
+greeting = "Hello and how are you"
+about_the_ai = "Questions about the assistant itself"
+banter = "Casual conversation"
+
+[tags.domain]
+question = "Which area does this conversation serve?"
+[tags.domain.options]
+software = "Software, data and IT"
+marketing_sales = "Marketing, advertising and sales"
+customer_support = "Serving a company's customers"
+finance = "Accounting, investing, banking"
+legal = "Law, contracts, compliance"
+hr_people = "Hiring, workplace, careers"
+education = "Studying, teaching, homework"
+health = "Medicine and wellbeing"
+operations = "Running the business: planning, vendors, admin"
+science_engineering = "Science and engineering outside software"
+media_entertainment = "Fiction, games, media"
+personal_life = "Everyday personal matters"
+other = "None of these"
+
+[tags.environment]
+question = "Is this doing a real job, or is the content itself a test?"
+[tags.environment.options]
+production = "Doing a real job, by a person or by a program: the output is meant to be used, however templated"
+dev_test = "The content itself is a test: 'test', placeholder or dummy input, the same prompt tried several ways, attempts to get round the model's rules"
+
+[tags.workload]
+question = "Was a person chatting, or a program sending templated input?"
+[tags.workload.options]
+interactive = "A person typing and reading the replies"
+automated = "A program sending templated input: fixed instructions around swapped-in content, a required output format"
+
+[tags.data_class]
+question = "How sensitive is the most sensitive thing in this conversation?"
+[tags.data_class.options]
+public = "Nothing that is not already public"
+internal = "Ordinary business content not meant for outsiders"
+confidential = "Business secrets, contracts, credentials, private documents"
+regulated = "Personal data about people, health, payment or financial account details"
+
+[actions]
+hold = { data_class = ["confidential", "regulated"] }
+dev_test = { environment = ["dev_test"] }

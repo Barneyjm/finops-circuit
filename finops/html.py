@@ -16,10 +16,6 @@ from dataclasses import asdict
 from datetime import date
 from typing import Any
 
-from .agent import TAG_KEYS
-
-GATES_SHOWN = ("task", "subtask", "workload", "environment", "domain", "data_class", "business", "downgrade", "cache", "hold", "dev_test")
-
 
 def _row(f: Any, text: str | None) -> dict[str, Any]:
     d = asdict(f) if not isinstance(f, dict) else f
@@ -34,11 +30,11 @@ def _row(f: Any, text: str | None) -> dict[str, Any]:
         "in": c["input_tokens"],
         "out": c["output_tokens"],
         "tags": d["tags"],
-        "source": d.get("tag_source") or {k: ("code" if k == "app" else "inferred") for k in TAG_KEYS},
+        "source": d.get("tag_source") or {k: ("code" if k == "app" else "inferred") for k in d["tags"]},
         "business": d["business"],
         "actions": d["actions"],
         "savings": d["savings_usd"],
-        "gates": {k: {"value": gates[k]["value"], "outcome": gates[k]["outcome"], "trace": "; ".join(gates[k].get("trace") or [])} for k in GATES_SHOWN if k in gates},
+        "gates": {k: {"value": g["value"], "outcome": g["outcome"], "trace": "; ".join(g.get("trace") or [])} for k, g in gates.items() if not k.startswith("_")},
         **({"text": text} if text else {}),
     }
 
@@ -47,7 +43,7 @@ def render(findings: list[Any], *, apps: dict[str, str] | None = None, backend: 
     """The page body (title, style, markup, data, script), without the html/head/body wrapper."""
     data = {
         "rows": [_row(f, (texts or {}).get(f["id"] if isinstance(f, dict) else f.id)) for f in findings],
-        "keys": list(TAG_KEYS),
+        "keys": list(dict.fromkeys(k for f in findings for k in (f["tags"] if isinstance(f, dict) else f.tags))),
         "extra_keys": ["model", "month"],  # grouping keys that are facts about the call, not tags
         "apps": apps or {},
         "backend": backend,
@@ -245,7 +241,7 @@ const ALLKEYS = [...DATA.keys, ...(DATA.extra_keys || [])];
 const opts = (list) => list.map((k) => `<option value="${k}">${k}</option>`).join("");
 by1.innerHTML = `<optgroup label="Tags">${opts(DATA.keys)}</optgroup><optgroup label="The call">${opts(DATA.extra_keys || [])}</optgroup>`;
 by2.innerHTML = `<option value="">nothing</option><optgroup label="Tags">${opts(DATA.keys)}</optgroup><optgroup label="The call">${opts(DATA.extra_keys || [])}</optgroup>`;
-by1.value = load("finops.by1") || "task";
+by1.value = [load("finops.by1"), DATA.keys.find((k) => k !== "app")].find((k) => k && ALLKEYS.includes(k)) || DATA.keys[0];
 by2.value = load("finops.by2") ?? "";
 by1.onchange = by2.onchange = () => { store("finops.by1", by1.value); store("finops.by2", by2.value); filter = null; draw(); };
 

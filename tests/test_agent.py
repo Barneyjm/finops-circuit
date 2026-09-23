@@ -1,17 +1,19 @@
 """The circuit, the pricing and the report, with the hand-written answers in samples/: no network."""
 
+import json
 from pathlib import Path
 
 import pytest
 
-from finops import TAG_KEYS, analyze, app_ids, build_circuit, report
+from finops import analyze, app_ids, build_circuit, load_taxonomy, report, tag_keys
 from finops.backends import FakeBackend
 from finops.conversations import from_wildchat, load, transcript
 from finops.pricing import cost, price_of
 
 SAMPLES = {c["id"]: c for c in load(Path(__file__).resolve().parents[1] / "samples")}
 APPS = app_ids(list(SAMPLES.values()))
-V2 = build_circuit(v2=True)
+TX = load_taxonomy()
+V2 = build_circuit(TX, v2=True)
 
 
 def run(cid, circuit=V2):
@@ -20,7 +22,7 @@ def run(cid, circuit=V2):
 
 def test_every_conversation_gets_every_tag_key():
     for cid in SAMPLES:
-        assert set(run(cid).tags) == set(TAG_KEYS), cid
+        assert list(run(cid).tags) == tag_keys(TX), cid
 
 
 def test_two_stage_task_then_subtask():
@@ -155,3 +157,63 @@ def test_spend_by_month():
     c = analyze({**SAMPLES["03_meeting_summary"], "timestamp": "2024-07-01T00:00:00"}, FakeBackend(), circuit=V2)
     months = report([a, b, c])["by_month"]
     assert list(months) == ["2024-05", "2024-07"] and months["2024-05"] == pytest.approx(round(a.cost.usd + b.cost.usd, 4))
+
+
+CUSTOM = """
+[tags.team]
+question = "Which team would own this work?"
+[tags.team.options]
+growth = "Marketing and sales"
+platform = "Engineering"
+[tags.stage]
+parent = "team"
+question = "Which {parent} activity?"
+[tags.stage.options.platform]
+build = "Building"
+run = "Running"
+[tags.risk]
+question = "How risky is the content?"
+[tags.risk.options]
+low = "Low"
+high = "High"
+[actions]
+hold = { risk = ["high"] }
+"""
+
+
+def test_a_custom_taxonomy_defines_its_own_tags_children_and_actions(tmp_path):
+    path = tmp_path / "tags.toml"
+    path.write_text(CUSTOM)
+    tx = load_taxonomy(path)
+    conv = {
+        **SAMPLES["02_sql_debug"],
+        "tags": {"cost_center": "cc-4411"},
+        "expected_answers": {**SAMPLES["02_sql_debug"]["expected_answers"], "team": {"growth": 0.1, "platform": 0.9}, "stage": {"build": 0.9, "run": 0.1}, "risk": {"low": 0.1, "high": 0.9}},
+    }
+    f = analyze(conv, FakeBackend(), taxonomy=tx, circuit=build_circuit(tx))
+    assert f.tags == {"app": "adhoc", "team": "platform", "stage": "build", "risk": "high", "cost_center": "cc-4411"}
+    assert f.tag_source["cost_center"] == "declared" and any(a.startswith("hold: risk=high") for a in f.actions)
+    growth = analyze({**conv, "expected_answers": {**conv["expected_answers"], "team": {"growth": 0.9, "platform": 0.1}}}, FakeBackend(), taxonomy=tx, circuit=build_circuit(tx))
+    assert growth.tags["stage"] == "n/a"  # growth has no stages: not applicable, not untagged
+
+
+def test_a_broken_taxonomy_is_refused(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text(CUSTOM.replace('hold = { risk = ["high"] }', 'hold = { risk = ["extreme"] }'))
+    with pytest.raises(ValueError, match="extreme"):
+        load_taxonomy(bad)
+
+
+def test_focus_rows_carry_the_mandatory_columns_and_add_up():
+    from finops.focus import COLUMNS, rows
+
+    findings = [run(cid) for cid in SAMPLES]
+    out = rows(findings)
+    assert len(out) == 2 * len(findings)
+    mandatory = ["BilledCost", "BillingAccountId", "BillingCurrency", "ChargeCategory", "ChargePeriodStart", "EffectiveCost", "ListCost", "PricingUnit", "ServiceCategory", "ServiceProviderName"]
+    assert all(r[k] not in (None, "") for r in out for k in mandatory) and set(out[0]) <= set(COLUMNS)
+    assert sum(r["BilledCost"] for r in out) == pytest.approx(sum(f.cost.usd for f in findings))
+    assert sum(r["x_PotentialSavings"] for r in out) == pytest.approx(sum(f.savings_usd for f in findings))
+    tags = json.loads(out[0]["Tags"])
+    assert all(k.startswith("finops-circuit/") for k in tags) and "untagged" not in tags.values()
+    assert out[0]["ServiceSubcategory"] == "Generative AI" and out[0]["PricingUnit"] == "1000000 Tokens"

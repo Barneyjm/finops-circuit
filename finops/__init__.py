@@ -1,7 +1,7 @@
 """finops-circuit: tag LLM spend the way cloud spend is tagged, and say what to change."""
 
-from .agent import TAG_KEYS, Finding, analyze, report
-from .circuit import build_circuit, build_subtask_circuit
+from .agent import Finding, analyze, report, tag_keys
+from .circuit import Taxonomy, build_child_circuit, build_circuit, load_taxonomy
 from .tags import app_ids
 
-__all__ = ["TAG_KEYS", "Finding", "analyze", "app_ids", "build_circuit", "build_subtask_circuit", "report"]
+__all__ = ["Finding", "Taxonomy", "analyze", "app_ids", "build_child_circuit", "build_circuit", "load_taxonomy", "report", "tag_keys"]
