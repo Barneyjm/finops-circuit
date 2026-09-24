@@ -15,8 +15,8 @@ import json
 import random
 from pathlib import Path
 
-from finops.circuit import load_taxonomy
-from finops.conversations import load, transcript
+from tokenomics.circuit import load_taxonomy
+from tokenomics.conversations import load, transcript
 
 ROOT = Path(__file__).resolve().parents[1]
 TAGS = ("task", "domain", "environment", "workload", "data_class")

@@ -1,16 +1,16 @@
-"""finops fetch|analyze|report|diagram
+"""tokenomics fetch|analyze|report|diagram
 
-finops fetch --n 200                                   # a WildChat-4.8M sample into data/wildchat.jsonl
-finops import litellm-logs.jsonl --out data/mine.jsonl # gateway logs (LiteLLM, Helicone, OpenAI pairs) as conversations
-finops analyze samples/02_sql_debug.json                # one conversation: tags, cost, actions, reasons
-finops report data/wildchat.jsonl --by task,subtask     # spend grouped by tags, coverage, savings
-finops report data/wildchat.jsonl --save data/findings.json
-finops report data/big.jsonl --sample 400 --save f.json  # tag 400 cost-weighted draws; shares with 90% intervals
-finops html data/findings.json --out report.html        # the dashboard, one self-contained file
-finops focus data/findings.json --out focus.csv          # the same spend as a FOCUS 1.4 dataset
-finops reprice data/findings.json --prices my-prices.toml  # the saved findings under new prices, no model calls
+tokenomics fetch --n 200                                   # a WildChat-4.8M sample into data/wildchat.jsonl
+tokenomics import litellm-logs.jsonl --out data/mine.jsonl # gateway logs (LiteLLM, Helicone, OpenAI pairs) as conversations
+tokenomics analyze samples/02_sql_debug.json                # one conversation: tags, cost, actions, reasons
+tokenomics report data/wildchat.jsonl --by task,subtask     # spend grouped by tags, coverage, savings
+tokenomics report data/wildchat.jsonl --save data/findings.json
+tokenomics report data/big.jsonl --sample 400 --save f.json  # tag 400 cost-weighted draws; shares with 90% intervals
+tokenomics html data/findings.json --out report.html        # the dashboard, one self-contained file
+tokenomics focus data/findings.json --out focus.csv          # the same spend as a FOCUS 1.4 dataset
+tokenomics reprice data/findings.json --prices my-prices.toml  # the saved findings under new prices, no model calls
                                                         # (--prices on focus or html reprices on the fly)
-finops diagram                                          # the circuit as Mermaid
+tokenomics diagram                                          # the circuit as Mermaid
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from .tags import app_ids, app_labels
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="finops", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="tokenomics", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["fetch", "import", "analyze", "report", "html", "focus", "reprice", "diagram"])
     ap.add_argument("path", nargs="?", default="samples")
     ap.add_argument("--backend", default="circuits", help=", ".join(BACKENDS))
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--n", type=int, default=200, help="fetch: how many conversations")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None, help="fetch: data/wildchat.jsonl; import: data/imported.jsonl; html: report.html; reprice: the findings file itself")
-    ap.add_argument("--save", default=None, help="report: also write the findings (audit included) to this JSON file, for `finops html`")
+    ap.add_argument("--save", default=None, help="report: also write the findings (audit included) to this JSON file, for `tokenomics html`")
     ap.add_argument("--with-text", action="store_true", help="html: include each conversation's first message (left out by default)")
     ap.add_argument("--workers", type=int, default=4, help="conversations analyzed at once")
     ap.add_argument("--account", default="llm-usage", help="focus: BillingAccountId (BillingAccountName is the same unless --account-name)")
@@ -53,8 +53,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--by", default=None, help="report: comma-separated tag keys to group spend by (any taxonomy tag, app, or a declared tag)")
     ap.add_argument("--format", default="auto", help="import: litellm, helicone, openai, or auto (from the first row's keys)")
     ap.add_argument("--sample", type=float, default=None, help="report: tag only N cost-weighted draws (or a fraction, 0.02), with 90%% intervals; spend is still counted in full")
-    ap.add_argument("--prices", default=None, help="a price table TOML (default: finops/prices.toml)")
-    ap.add_argument("--taxonomy", default=None, help="a tag taxonomy TOML (default: finops/taxonomy.toml)")
+    ap.add_argument("--prices", default=None, help="a price table TOML (default: tokenomics/prices.toml)")
+    ap.add_argument("--taxonomy", default=None, help="a tag taxonomy TOML (default: tokenomics/taxonomy.toml)")
     ap.add_argument("--v2", action=argparse.BooleanOptionalAction, default=None, help=f"ask the circuit v2 questions (default: on for {', '.join(V2_BACKENDS)}, not for {', '.join(V1_MODELS)})")
     args = ap.parse_args(argv)
     v2 = args.v2 if args.v2 is not None else speaks_v2(args.backend, args.model)

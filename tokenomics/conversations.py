@@ -6,7 +6,7 @@ rows are converted on the way in, and only these fields are kept: WildChat also 
 country, a state, a hashed IP and browser headers per conversation, which a cost report has no
 use for, so they never reach disk.
 
-    finops fetch --n 200                     # a sample of WildChat-4.8M into data/wildchat.jsonl
+    tokenomics fetch --n 200                     # a sample of WildChat-4.8M into data/wildchat.jsonl
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _get(url: str, tries: int = 8) -> dict[str, Any]:
     wait = 2.0
     for attempt in range(tries):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers={"user-agent": "finops-circuit"}), timeout=60) as r:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"user-agent": "llm-tokenomics"}), timeout=60) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
             if (e.code != 429 and e.code < 500) or attempt == tries - 1:

@@ -11,16 +11,16 @@ The mapping:
     PricingQuantity / PricingUnit          tokens / 1e6 / "1000000 Tokens"
     ListUnitPrice, ContractedUnitPrice     the saved cost's price per million, list and after the discount
     ListCost; ContractedCost = EffectiveCost = BilledCost    list, then after the discount, as the
-                                           finding was billed (`finops reprice` to change prices)
+                                           finding was billed (`tokenomics reprice` to change prices)
     ChargePeriodStart/End                  the hour of the conversation; BillingPeriod its month
     ResourceId / ResourceName / ResourceType   the conversation / its app / "Conversation"
     SkuId, SkuPriceId, SkuMeter            "<model>/input-tokens" and so on
     Tags                                   declared tags as given; inferred and code tags under the
-                                           "finops-circuit/" prefix, their own tag scheme
+                                           "llm-tokenomics/" prefix, their own tag scheme
     x_ columns                             tag sources, estimated quantities, actions, potential savings
 
 FOCUS asks for one prefix-free user tag scheme and a prefix for every other scheme, so what the
-conversation declared keeps its keys and what this tool inferred carries `finops-circuit/`.
+conversation declared keeps its keys and what this tool inferred carries `llm-tokenomics/`.
 Untagged and n/a tags are left out: Tags holds values, not the absence of one.
 """
 
@@ -36,7 +36,7 @@ from typing import Any
 from .agent import NOT_APPLICABLE, Finding
 from .circuit import UNTAGGED
 
-TAG_PREFIX = "finops-circuit/"
+TAG_PREFIX = "llm-tokenomics/"
 
 COLUMNS = [
     # mandatory in FOCUS 1.4

@@ -1,4 +1,4 @@
-"""finops-circuit: tag LLM spend the way cloud spend is tagged, and say what to change."""
+"""llm-tokenomics: tag LLM spend the way cloud spend is tagged, and say what to change."""
 
 from .agent import Finding, analyze, report, reprice, sample, tag_keys
 from .circuit import Taxonomy, build_child_circuit, build_circuit, load_taxonomy

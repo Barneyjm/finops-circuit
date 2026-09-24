@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from finops import analyze, app_ids, build_circuit, load_taxonomy, report, tag_keys
-from finops.backends import FakeBackend
-from finops.conversations import from_wildchat, load, transcript
-from finops.pricing import cost, default_prices
+from tokenomics import analyze, app_ids, build_circuit, load_taxonomy, report, tag_keys
+from tokenomics.backends import FakeBackend
+from tokenomics.conversations import from_wildchat, load, transcript
+from tokenomics.pricing import cost, default_prices
 
 SAMPLES = {c["id"]: c for c in load(Path(__file__).resolve().parents[1] / "samples")}
 APPS = app_ids(list(SAMPLES.values()))
@@ -148,7 +148,7 @@ def test_declared_tags_win_and_the_circuit_fills_the_gaps():
 def test_the_dashboard_carries_the_data_and_no_conversation_text_by_default():
     from dataclasses import asdict
 
-    from finops.html import document, render
+    from tokenomics.html import document, render
 
     findings = [asdict(run(cid)) | {"first_message": SAMPLES[cid]["turns"][0]["content"]} for cid in SAMPLES]
     body = render(findings)
@@ -211,7 +211,7 @@ def test_a_broken_taxonomy_is_refused(tmp_path):
 
 
 def test_focus_rows_carry_the_mandatory_columns_and_add_up():
-    from finops.focus import COLUMNS, rows
+    from tokenomics.focus import COLUMNS, rows
 
     findings = [run(cid) for cid in SAMPLES]
     out = list(rows(findings))
@@ -221,7 +221,7 @@ def test_focus_rows_carry_the_mandatory_columns_and_add_up():
     assert sum(r["BilledCost"] for r in out) == pytest.approx(sum(f.cost.usd for f in findings))
     assert sum(r["x_PotentialSavings"] for r in out) == pytest.approx(sum(f.savings_usd for f in findings))
     tags = json.loads(out[0]["Tags"])
-    assert all(k.startswith("finops-circuit/") for k in tags) and "untagged" not in tags.values()
+    assert all(k.startswith("llm-tokenomics/") for k in tags) and "untagged" not in tags.values()
     assert out[0]["ServiceSubcategory"] == "Generative AI" and out[0]["PricingUnit"] == "1000000 Tokens"
 
 
@@ -248,7 +248,7 @@ output = 8.00
 
 
 def prices(tmp_path, text=PRICES):
-    from finops import load_prices
+    from tokenomics import load_prices
 
     (tmp_path / "prices.toml").write_text(text)
     return load_prices(tmp_path / "prices.toml")
@@ -294,7 +294,7 @@ def test_a_long_conversation_on_a_model_with_a_prompt_cache_is_told_to_cache(tmp
 
 
 def test_focus_bills_cached_input_on_its_own_row_after_the_discount(tmp_path):
-    from finops.focus import rows
+    from tokenomics.focus import rows
 
     table = prices(tmp_path)
     conv = {
@@ -319,7 +319,7 @@ def test_focus_bills_cached_input_on_its_own_row_after_the_discount(tmp_path):
 def test_reprice_decides_again_from_the_saved_gates_without_the_model(tmp_path):
     from dataclasses import asdict
 
-    from finops import reprice
+    from tokenomics import reprice
 
     conv = {**SAMPLES["10_long_code_session"], "model": "big"}
     old = prices(tmp_path, PRICES.replace("cached_input = 0.50\n", ""))  # the same table before "big" got a cache price
@@ -333,7 +333,7 @@ def test_reprice_decides_again_from_the_saved_gates_without_the_model(tmp_path):
 
 
 def test_findings_saved_before_actions_had_keys_still_load():
-    from finops import Finding
+    from tokenomics import Finding
 
     old = {"id": "x", "model": "gpt-4-0613", "timestamp": None, "turns": 1, "tags": {"app": "adhoc", "task": "code"}, "business": True, "audit": {},
            "cost": {"model": "gpt-4-0613", "input_tokens": 100, "cached_tokens": 0, "output_tokens": 50, "output_measured": 50, "usd": 0.006, "caching_savings_usd": 0.0},
@@ -344,14 +344,14 @@ def test_findings_saved_before_actions_had_keys_still_load():
 
 
 def test_v2_questions_default_on_for_v2_models_only():
-    from finops.backends import speaks_v2
+    from tokenomics.backends import speaks_v2
 
     assert speaks_v2("circuits", None) and speaks_v2("local", "circuit-1.7b")
     assert not speaks_v2("circuits", "circuit-8b") and not speaks_v2("jev", None)
 
 
 def test_a_cost_weighted_sample_estimates_the_census_within_its_intervals():
-    from finops import sample
+    from tokenomics import sample
 
     pop = [dict(c, id=f"{cid}-{k}", turns=c["turns"] * (1 + k % 4)) for cid, c in SAMPLES.items() for k in range(20)]
     census = [analyze(c, FakeBackend(), circuit=V2, app=APPS[c["id"].rsplit("-", 1)[0]]) for c in pop]

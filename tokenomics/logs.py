@@ -138,7 +138,7 @@ def _key(messages: list[dict[str, Any]]) -> str:
 
 
 def conversations(rows: list[dict[str, Any]], fmt: str = "auto") -> list[dict[str, Any]]:
-    """Log rows to conversations (finops's format), threads stitched, in time order."""
+    """Log rows to conversations (this package's format), threads stitched, in time order."""
     calls = [call(r, detect(r) if fmt == "auto" else fmt) for r in rows]
     calls.sort(key=lambda c: c["time"] or "")
     threads: list[dict[str, Any]] = []

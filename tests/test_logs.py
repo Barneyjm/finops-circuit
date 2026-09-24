@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from finops.logs import conversations, detect
-from finops.pricing import cost
+from tokenomics.logs import conversations, detect
+from tokenomics.pricing import cost
 
 SYS = {"role": "system", "content": "You help the ops team with supplier questions."}
 Q1 = {"role": "user", "content": "Which suppliers missed the March delivery window?"}

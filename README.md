@@ -1,4 +1,4 @@
-# finops-circuit
+# llm-tokenomics
 
 Tag LLM spend the way cloud spend is tagged, then say what to change. Built on
 [decision circuits](https://github.com/Barneyjm/decision-circuits).
@@ -9,7 +9,7 @@ questions with probabilities; plain code turns them into tags, a tag it is not s
 out `untagged`, and the report groups spend by any tags the way a cloud bill is grouped.
 
 ```
-$ finops analyze samples --backend fake
+$ tokenomics analyze samples --backend fake
 
 == 11_keyword_app.json  gpt-4o-2024-08-06, 1 replies, $0.0003  (44 in / 20 out)
    Provide only relevant keywords to facilitate an online search for the product below. Return a comma-separated
@@ -77,35 +77,35 @@ repo).
 ## Install
 
 ```bash
-uv tool install finops-circuit      # or: pipx install finops-circuit
-finops --help
+uv tool install llm-tokenomics      # or: pipx install llm-tokenomics
+tokenomics --help
 ```
 
-Upgrade with `uv tool upgrade finops-circuit`. The default backend (circuit-1.7b, hosted) issues
+Upgrade with `uv tool upgrade llm-tokenomics`. The default backend (circuit-1.7b, hosted) issues
 its own free key, so the first run needs no configuration; other backends read their key from the
 environment (see `.env.example`).
 
 ## Run it
 
 ```bash
-git clone https://github.com/Barneyjm/finops-circuit && cd finops-circuit
+git clone https://github.com/Barneyjm/llm-tokenomics && cd llm-tokenomics
 uv sync
 cp .env.example .env                                   # one key for the backend you pick
-uv run finops fetch --n 200                            # a WildChat-4.8M sample into data/
-uv run finops report data/wildchat.jsonl --by task,subtask       # circuit-1.7b by default; --backend jev for TypeSafe
+uv run tokenomics fetch --n 200                            # a WildChat-4.8M sample into data/
+uv run tokenomics report data/wildchat.jsonl --by task,subtask       # circuit-1.7b by default; --backend jev for TypeSafe
 ```
 
 | | |
 |---|---|
-| `finops fetch --n N` | N real conversations from WildChat-4.8M into `data/wildchat.jsonl` |
-| `finops import logs.jsonl --out data/mine.jsonl` | your gateway's logs (LiteLLM, Helicone, OpenAI request/response pairs) as conversations |
-| `finops report ... --sample 400` | tag 400 cost-weighted draws instead of every conversation; shares with 90% intervals |
-| `finops analyze <file or dir>` | per conversation: tags, cost, actions, the gate traces |
-| `finops report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
-| `finops report ... --save findings.json` then `finops html findings.json` | the dashboard: one self-contained HTML file (conversation text left out unless `--with-text`) |
-| `finops focus findings.json --out focus.csv` | the same spend as a FOCUS 1.4 Cost and Usage dataset |
-| `finops reprice findings.json --prices mine.toml` | the saved findings under a new price table: costs and actions again, no model calls |
-| `finops diagram` | the circuit as Mermaid |
+| `tokenomics fetch --n N` | N real conversations from WildChat-4.8M into `data/wildchat.jsonl` |
+| `tokenomics import logs.jsonl --out data/mine.jsonl` | your gateway's logs (LiteLLM, Helicone, OpenAI request/response pairs) as conversations |
+| `tokenomics report ... --sample 400` | tag 400 cost-weighted draws instead of every conversation; shares with 90% intervals |
+| `tokenomics analyze <file or dir>` | per conversation: tags, cost, actions, the gate traces |
+| `tokenomics report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
+| `tokenomics report ... --save findings.json` then `tokenomics html findings.json` | the dashboard: one self-contained HTML file (conversation text left out unless `--with-text`) |
+| `tokenomics focus findings.json --out focus.csv` | the same spend as a FOCUS 1.4 Cost and Usage dataset |
+| `tokenomics reprice findings.json --prices mine.toml` | the saved findings under a new price table: costs and actions again, no model calls |
+| `tokenomics diagram` | the circuit as Mermaid |
 
 `--backend` picks the model, as in [call-center-circuit](https://github.com/Barneyjm/call-center-circuit):
 `circuits` (the default: circuit-1.7b hosted, a free key is issued; `--model circuit-8b` for the
@@ -142,7 +142,7 @@ especially belongs in metadata: whether traffic is a test is rarely in its text.
 
 ## Your own tags
 
-The tags are a TOML file, `finops/taxonomy.toml` by default; copy it and pass `--taxonomy`.
+The tags are a TOML file, `tokenomics/taxonomy.toml` by default; copy it and pass `--taxonomy`.
 
 ```toml
 [tags.team]
@@ -173,7 +173,7 @@ option, or a tag named `app` (set in code) is refused.
 
 ## Your own logs
 
-`finops import` reads a gateway's log export and stitches its calls back into conversations
+`tokenomics import` reads a gateway's log export and stitches its calls back into conversations
 (a chat API is sent the whole history on every call, so the calls of one thread are prefixes of
 each other). Each reply keeps the provider's token counts, cached included, so input and cache
 figures are measured rather than estimated.
@@ -202,7 +202,7 @@ the size of the log.
 
 ## FOCUS
 
-`finops focus` writes the findings as a [FOCUS 1.4](https://focus.finops.org) Cost and Usage
+`tokenomics focus` writes the findings as a [FOCUS 1.4](https://focus.finops.org) Cost and Usage
 dataset, so LLM spend loads into the same FinOps tools as cloud bills. Each conversation is a
 usage row per kind of token, since each is priced separately: input, cached input (when the log
 recorded any) and output.
@@ -220,11 +220,11 @@ recorded any) and output.
 | ChargePeriodStart/End, BillingPeriodStart/End | the conversation's hour, its month |
 | ResourceId / ResourceName / ResourceType | the conversation / its app / `Conversation` |
 | SkuId, SkuPriceId, SkuMeter | `<model>/input-tokens` (or `cached-input-tokens`, `output-tokens`), its price, `Input Tokens` |
-| Tags | declared tags as given; inferred and code tags under the `finops-circuit/` prefix |
+| Tags | declared tags as given; inferred and code tags under the `llm-tokenomics/` prefix |
 | x_ columns | tag sources, whether a quantity is estimated, actions, potential savings |
 
 FOCUS wants one prefix-free user tag scheme and a prefix on every other, so what a conversation
-declares keeps its keys and what this tool infers carries `finops-circuit/`. Untagged and n/a
+declares keeps its keys and what this tool infers carries `llm-tokenomics/`. Untagged and n/a
 values are left out of Tags. Quantities the log did not record are marked `x_QuantityEstimated`.
 A kind of token a conversation did not use gets no row.
 
@@ -239,7 +239,7 @@ has that file.
 
 ## What the report recommends
 
-Gates over the same answers (`finops/circuit.py`), actions in code (`finops/agent.py`):
+Gates over the same answers (`tokenomics/circuit.py`), actions in code (`tokenomics/agent.py`):
 
 | action | when | saves |
 |---|---|---|
@@ -258,7 +258,7 @@ add up: a downgrade's caching figure is priced on the small model, not twice.
 
 ## Prices and token usage
 
-Prices live in `finops/prices.toml`: per model, `input`, `output`,
+Prices live in `tokenomics/prices.toml`: per model, `input`, `output`,
 `cached_input` (leave it out where there is no prompt cache) and `discount` (your contracted
 discount off list, 0 to 1), plus the table's `currency` and the `small_model` downgrades are
 priced on. A model matches the longest key its name starts with. Copy the file and pass it:
@@ -276,9 +276,9 @@ discount = 0.15
 ```
 
 ```bash
-uv run finops report data/wildchat.jsonl --prices mine.toml --save data/findings.json
-uv run finops reprice data/findings.json --prices other.toml    # what-if, no model calls
-uv run finops focus data/findings.json --prices other.toml      # --prices on focus or html reprices on the fly
+uv run tokenomics report data/wildchat.jsonl --prices mine.toml --save data/findings.json
+uv run tokenomics reprice data/findings.json --prices other.toml    # what-if, no model calls
+uv run tokenomics focus data/findings.json --prices other.toml      # --prices on focus or html reprices on the fly
 ```
 
 Repricing bills the saved token counts again and decides the actions again from the saved
@@ -302,8 +302,8 @@ but no text to tag.
 
 ## A thousand real conversations
 
-`finops report` on 1,000 WildChat conversations (14 models, June 2023 to July 2025), tagged by
-Jev, then `finops html`:
+`tokenomics report` on 1,000 WildChat conversations (14 models, June 2023 to July 2025), tagged by
+Jev, then `tokenomics html`:
 
 | | |
 |---|---|
@@ -324,7 +324,7 @@ flag.
 ## Data
 
 [WildChat-4.8M](https://huggingface.co/datasets/allenai/WildChat-4.8M) (AI2, ODC-BY): real
-conversations with ChatGPT models. `finops fetch` samples it through Hugging Face's datasets
+conversations with ChatGPT models. `tokenomics fetch` samples it through Hugging Face's datasets
 server and keeps only the model, the language and the turns with their token counts; the
 country, state, hashed IP and browser headers WildChat records are dropped before anything is
 written. `data/` is not committed. The conversations in `samples/` are written for the tests

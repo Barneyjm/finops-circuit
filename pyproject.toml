@@ -1,5 +1,5 @@
 [project]
-name = "finops-circuit"
+name = "llm-tokenomics"
 version = "0.1.0"
 description = "Tag LLM spend the way cloud spend is tagged, with calibrated decision models, and export it as FOCUS 1.4"
 readme = "README.md"
@@ -28,18 +28,18 @@ anthropic = ["decision-circuits[anthropic]"]
 
 [project.urls]
 Homepage = "https://decisioncircuits.com"
-Source = "https://github.com/Barneyjm/finops-circuit"
-Changelog = "https://github.com/Barneyjm/finops-circuit/commits/main"
+Source = "https://github.com/Barneyjm/llm-tokenomics"
+Changelog = "https://github.com/Barneyjm/llm-tokenomics/commits/main"
 
 [project.scripts]
-finops = "finops.cli:main"
+tokenomics = "tokenomics.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["finops"]
+packages = ["tokenomics"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["scripts/", ".github/"]  # model-training tooling, not part of the package
@@ -52,7 +52,7 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"finops/html.py" = ["E501"]  # the page's markup and script, kept as written
+"tokenomics/html.py" = ["E501"]  # the page's markup and script, kept as written
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]

@@ -1,8 +1,8 @@
 """A self-contained HTML dashboard of a set of findings: spend by any tags, coverage, actions,
 and the conversation ledger with each one's gate traces.
 
-    finops report data/wildchat.jsonl --backend jev --save data/findings.json
-    finops html data/findings.json --out report.html
+    tokenomics report data/wildchat.jsonl --backend jev --save data/findings.json
+    tokenomics html data/findings.json --out report.html
 
 The page carries its data inline and loads nothing but two web fonts, so it opens from disk.
 Conversation text is left out unless `with_text` is set: a cost dashboard gets passed around,
@@ -253,9 +253,9 @@ const ALLKEYS = [...DATA.keys, ...(DATA.extra_keys || [])];
 const opts = (list) => list.map((k) => `<option value="${k}">${k}</option>`).join("");
 by1.innerHTML = `<optgroup label="Tags">${opts(DATA.keys)}</optgroup><optgroup label="The call">${opts(DATA.extra_keys || [])}</optgroup>`;
 by2.innerHTML = `<option value="">nothing</option><optgroup label="Tags">${opts(DATA.keys)}</optgroup><optgroup label="The call">${opts(DATA.extra_keys || [])}</optgroup>`;
-by1.value = [load("finops.by1"), DATA.keys.find((k) => k !== "app")].find((k) => k && ALLKEYS.includes(k)) || DATA.keys[0];
-by2.value = load("finops.by2") ?? "";
-by1.onchange = by2.onchange = () => { store("finops.by1", by1.value); store("finops.by2", by2.value); filter = null; draw(); };
+by1.value = [load("tokenomics.by1"), DATA.keys.find((k) => k !== "app")].find((k) => k && ALLKEYS.includes(k)) || DATA.keys[0];
+by2.value = load("tokenomics.by2") ?? "";
+by1.onchange = by2.onchange = () => { store("tokenomics.by1", by1.value); store("tokenomics.by2", by2.value); filter = null; draw(); };
 
 const val = (r, k) => (k === "model" ? r.model : k === "month" ? r.month || "undated" : r.tags[k]);
 function keyOf(r) { return by2.value && by2.value !== by1.value ? val(r, by1.value) + " / " + val(r, by2.value) : val(r, by1.value); }
@@ -399,7 +399,7 @@ function toggle(tr) {
 const measured = rows.filter((r) => r.measured).length;
 document.getElementById("foot").innerHTML = `Tagged ${DATA.date}${DATA.backend ? " by " + esc(DATA.backend) : ""}. Spend is tokens times list prices from the price table; ${measured === rows.length ? "token counts are the provider's own" : measured ? `${measured.toLocaleString("en")} conversations carry the provider's token counts, the rest are estimated at four characters a token` : "the log records no input or cache counts, so input tokens are estimated at four characters a token and nothing counts as cached"}. ` +
   (draws ? `Spend is the whole log's; shares, tags and savings are estimated from ${draws} draws, each conversation drawn in proportion to its cost, so every draw stands for the same ${fmt(total / draws)}. ` : "") +
-  `A tag below the circuit's confidence floor is <i>untagged</i>, never guessed. Conversation text is not included. Built with finops-circuit on decision circuits.`;
+  `A tag below the circuit's confidence floor is <i>untagged</i>, never guessed. Conversation text is not included. Built with llm-tokenomics on decision circuits.`;
 draw();
 </script>
 """
