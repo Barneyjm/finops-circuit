@@ -27,7 +27,7 @@ $ tokenomics analyze samples --backend fake
 flowchart LR
   subgraph IN["Conversations in"]
     WC["WildChat-4.8M<br/>(HF datasets server)"]
-    LOGS["Gateway logs<br/>LiteLLM / Helicone / OpenAI<br/>+ declared tags (team, key)"]
+    LOGS["Gateway logs<br/>LiteLLM / Helicone / OpenAI / Anthropic<br/>+ declared tags (team, key)"]
   end
 
   FETCH["conversations.py<br/>fetch + normalise<br/>keeps model, time, turns, tokens<br/>drops location, IP, headers"]
@@ -98,7 +98,7 @@ uv run tokenomics report data/wildchat.jsonl --by task,subtask       # circuit-1
 | | |
 |---|---|
 | `tokenomics fetch --n N` | N real conversations from WildChat-4.8M into `data/wildchat.jsonl` |
-| `tokenomics import logs.jsonl --out data/mine.jsonl` | your gateway's logs (LiteLLM, Helicone, OpenAI request/response pairs) as conversations |
+| `tokenomics import logs.jsonl --out data/mine.jsonl` | your gateway's logs (LiteLLM, Helicone, OpenAI or Anthropic request/response pairs) as conversations |
 | `tokenomics report ... --sample 400` | tag 400 cost-weighted draws instead of every conversation; shares with 90% intervals |
 | `tokenomics analyze <file or dir>` | per conversation: tags, cost, actions, the gate traces |
 | `tokenomics report <file or dir> --by k1,k2` | spend grouped by tag keys, tag coverage, actions, savings |
@@ -173,16 +173,45 @@ option, or a tag named `app` (set in code) is refused.
 
 ## Your own logs
 
-`tokenomics import` reads a gateway's log export and stitches its calls back into conversations
-(a chat API is sent the whole history on every call, so the calls of one thread are prefixes of
-each other). Each reply keeps the provider's token counts, cached included, so input and cache
-figures are measured rather than estimated.
+`tokenomics import` reads a gateway's log export, or your own logs through a mapping, and
+stitches its calls back into conversations (a chat API is sent the whole history on every call,
+so the calls of one thread are prefixes of each other). Each reply keeps the provider's token
+counts, cached included, so input and cache figures are measured rather than estimated.
 
 | format | rows | declared tags from |
 |---|---|---|
 | `litellm` | StandardLoggingPayload (a logging callback, or the spend-log export) | team alias, key alias, requester_metadata, request_tags |
 | `helicone` | request rows from the Helicone query API | request_properties (the `Helicone-Property-*` headers) |
 | `openai` | `{"request": ..., "response": ...}` per line | the request's `metadata` |
+| `anthropic` | `{"request": ..., "response": ...}` per line, a Messages API body and its Message | the row's `metadata` |
+| `custom` | any JSON rows, read through a `--mapping` TOML | the fields the mapping lists under `tags` |
+
+Anthropic reports input net of its prompt cache, so an `anthropic` row's input is its
+`input_tokens` plus cache reads and cache writes. Writes bill above input (1.25x for the
+5-minute cache, 2x for the 1-hour one), so they are priced at the table's `cache_write` and
+`cache_write_1h` and get their own FOCUS rows. The top-level `system` becomes the first turn.
+
+Logs your own code writes go through `--mapping`: a TOML naming, as dotted paths into a row
+(`request.messages`, `response.choices.0.message.content`), where each part of a call is.
+Fields that hold JSON as a string are parsed on the way.
+
+```toml
+model    = "llm.model"
+system   = "llm.system"          # optional
+messages = "llm.history"         # chat messages; or `prompt` for one user message's text
+reply    = "llm.output"          # text, or a ChatCompletion / Message
+id       = "trace_id"            # optional: a hash of the row otherwise
+time     = "ts"                  # ISO or epoch seconds
+usage    = "llm.usage"           # an OpenAI or Anthropic usage object, told apart by its keys,
+input_tokens  = "cost.in"        # or the counts one by one
+output_tokens = "cost.out"
+cached_tokens = "cost.cache_read"
+cache_write_tokens = "cost.cache_write"
+input_excludes_cache = true      # input_tokens leaves the cache out, as Anthropic's does
+tags = ["team", "labels"]        # declared tags; a table spreads its keys
+```
+
+`tokenomics import my-logs.jsonl --mapping my-logs.toml`. Unknown keys in the mapping are refused.
 
 User ids are dropped: a tag names a team or a product, not a person. Assistant messages that
 arrive inside a prompt (few-shot examples) bill as input, not as replies.

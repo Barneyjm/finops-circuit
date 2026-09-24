@@ -72,3 +72,121 @@ def test_helicone_and_openai_rows():
     assert h[0]["tags"] == {"App": "supplier-desk", "Environment": "staging"} and h[0]["timestamp"] == "2025-03-01T10:00:00"
     assert o[0]["model"] == "gpt-4.1-2025-04-14" and o[0]["tags"] == {"team": "ops"}
     assert cost(o[0]["model"], o[0]["turns"]).usd == pytest.approx((30 * 2.00 + 12 * 8.00) / 1e6)
+
+
+def anthropic(i, messages, reply, usage, system=None, **row):
+    request = {"model": "claude-sonnet-4-6", "max_tokens": 1024, "messages": messages, "metadata": {"user_id": "someone"}} | ({"system": system} if system else {})
+    response = {"id": f"msg_{i}", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6", "content": [{"type": "text", "text": reply}], "stop_reason": "end_turn", "usage": usage}
+    return {"request": request, "response": response} | row
+
+
+def test_anthropic_pairs_count_cache_reads_and_writes_into_input_and_bill_writes_apart():
+    system = [{"type": "text", "text": SYS["content"], "cache_control": {"type": "ephemeral"}}]
+    rows = [
+        anthropic(
+            1,
+            [Q1],
+            A1,
+            {"input_tokens": 20, "output_tokens": 40, "cache_creation_input_tokens": 1180, "cache_read_input_tokens": 0},
+            system,
+            created_at="2026-09-01T10:00:00Z",
+            metadata={"team": "ops"},
+        ),
+        anthropic(
+            2,
+            [Q1, {"role": "assistant", "content": [{"type": "text", "text": A1}]}, Q2],
+            A2,
+            {
+                "input_tokens": 30,
+                "output_tokens": 90,
+                "cache_read_input_tokens": 1180,
+                "cache_creation_input_tokens": 190,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 190},
+            },
+            system,
+            created_at="2026-09-01T10:01:00Z",
+        ),
+    ]
+    assert detect(rows[0]) == "anthropic" and detect({"request": {}, "response": json.dumps(rows[0]["response"])}) == "anthropic"
+    (c,) = conversations(rows)
+    assert [t["role"] for t in c["turns"]] == ["system", "user", "assistant", "user", "assistant"]
+    assert c["turns"][0]["content"] == SYS["content"] and c["timestamp"] == "2026-09-01T10:00:00"
+    assert c["tags"] == {"team": "ops"}  # the request's user_id is not carried over
+    spend = cost(c["model"], c["turns"])
+    assert (spend.input_tokens, spend.cached_tokens, spend.cache_write_tokens, spend.cache_write_1h_tokens, spend.output_tokens) == (2600, 1180, 1180, 190, 130)
+    # sonnet 4.6: $3 input, $0.30 cache read, $3.75 5-minute write, $6 1-hour write, $15 output
+    assert spend.usd == pytest.approx((50 * 3.00 + 1180 * 0.30 + 1180 * 3.75 + 190 * 6.00 + 130 * 15.00) / 1e6)
+
+
+def test_helicone_rows_for_claude_keep_the_system_prompt():
+    row = {
+        "request_id": "h2",
+        "request_created_at": "2026-09-01T10:00:00Z",
+        "request_model": "claude-haiku-4-5",
+        "request_body": {"system": "Be brief.", "messages": [Q1]},
+        "response_body": {"type": "message", "content": [{"type": "text", "text": A1}]},
+        "prompt_tokens": 30,
+        "completion_tokens": 12,
+    }
+    (c,) = conversations([row])
+    assert [t["role"] for t in c["turns"]] == ["system", "user", "assistant"] and c["turns"][2]["content"] == A1
+
+
+def test_custom_rows_through_a_mapping(tmp_path):
+    from tokenomics.logs import Mapping, read
+
+    spec = """
+model = "llm.model"
+system = "llm.system"
+messages = "llm.history"
+reply = "llm.output"
+id = "trace"
+time = "ts"
+input_tokens = "cost.in"
+output_tokens = "cost.out"
+cached_tokens = "cost.cache_read"
+cache_write_tokens = "cost.cache_write"
+input_excludes_cache = true
+tags = ["team", "labels"]
+"""
+    first = {
+        "trace": "t1",
+        "ts": 1_756_720_800,
+        "team": "ops",
+        "user": "someone",
+        "labels": {"product": "supplier-desk"},
+        "llm": {"model": "claude-haiku-4-5", "system": "Be brief.", "history": [Q1], "output": A1},
+        "cost": {"in": 10, "out": 12, "cache_write": 1100},
+    }
+    second = first | {
+        "trace": "t2",
+        "ts": 1_756_720_860,
+        "llm": first["llm"] | {"history": [Q1, {"role": "assistant", "content": A1}, Q2], "output": A2},
+        "cost": {"in": 20, "out": 30, "cache_read": 1100},
+    }
+    (tmp_path / "map.toml").write_text(spec)
+    (tmp_path / "logs.jsonl").write_text(json.dumps(second) + "\n" + json.dumps(first) + "\n")
+    (c,) = read(tmp_path / "logs.jsonl", mapping=tmp_path / "map.toml")
+    assert c["id"] == "t1" and c["timestamp"] == "2025-09-01T10:00:00"
+    assert [t["role"] for t in c["turns"]] == ["system", "user", "assistant", "user", "assistant"]
+    assert c["tags"] == {"team": "ops", "product": "supplier-desk"}  # only the mapped fields
+    spend = cost(c["model"], c["turns"])
+    assert (spend.input_tokens, spend.cached_tokens, spend.cache_write_tokens, spend.output_tokens) == (2230, 1100, 1100, 42)
+
+    # a prompt/completion log with a provider usage object, told apart by its keys
+    simple = Mapping({"model": "m", "prompt": "q", "reply": "a.choices.0.message.content", "usage": "a.usage"})
+    row = {"m": "gpt-4.1", "q": "hi", "a": json.dumps({"choices": [{"message": {"content": "hello"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 2}})}
+    (o,) = conversations([row], mapping=simple)
+    assert o["turns"][-1] == {"role": "assistant", "content": "hello", "usage": {"input_tokens": 5, "output_tokens": 2, "cached_tokens": 0}}
+    assert len(o["id"]) == 16  # no id field: a hash of the row
+
+
+def test_a_mapping_is_checked_on_load():
+    from tokenomics.logs import Mapping
+
+    with pytest.raises(ValueError, match="unknown mapping keys"):
+        Mapping({"model": "m", "prompt": "p", "reply": "r", "modle": "x"})
+    with pytest.raises(ValueError, match="needs reply, messages or prompt"):
+        Mapping({"model": "m"})
+    with pytest.raises(ValueError, match="pass --mapping"):
+        conversations([{"x": 1}], "custom")

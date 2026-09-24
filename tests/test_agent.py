@@ -371,3 +371,19 @@ def test_a_cost_weighted_sample_estimates_the_census_within_its_intervals():
             assert lo - 0.02 <= g["share"] <= hi + 0.02, (k, g["share"], r["groups_ci"][k])
     lo, hi = r["intervals"]["savings_share"]
     assert lo - 0.02 <= truth["savings_share"] <= hi + 0.02
+
+
+def test_focus_bills_cache_writes_as_their_own_rows():
+    from tokenomics.agent import Finding
+    from tokenomics.focus import rows as focus_rows
+
+    turns = [
+        {"role": "user", "content": "x"},
+        {"role": "assistant", "content": "y", "usage": {"input_tokens": 2000, "output_tokens": 10, "cached_tokens": 1000, "cache_write_tokens": 500, "cache_write_1h_tokens": 100}},
+    ]
+    c = cost("claude-haiku-4-5", turns)
+    assert (c.input_usd, c.cached_usd, c.cache_write_usd, c.cache_write_1h_usd) == pytest.approx((400 * 1.00 / 1e6, 1000 * 0.10 / 1e6, 500 * 1.25 / 1e6, 100 * 2.00 / 1e6))
+    f = Finding(id="c1", model="claude-haiku-4-5", timestamp="2026-09-01T10:00:00", turns=1, cost=c, tags={}, tag_source={}, business=None, actions=[])
+    got = {r["SkuId"].split("/")[1]: (r["ConsumedQuantity"], r["ListCost"]) for r in focus_rows([f])}
+    assert got.keys() == {"input-tokens", "cached-input-tokens", "cache-write-tokens", "cache-write-1h-tokens", "output-tokens"}
+    assert sum(v[1] for v in got.values()) == pytest.approx(c.usd) and got["cache-write-1h-tokens"][0] == 100

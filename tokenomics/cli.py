@@ -1,7 +1,8 @@
 """tokenomics fetch|analyze|report|diagram
 
 tokenomics fetch --n 200                                   # a WildChat-4.8M sample into data/wildchat.jsonl
-tokenomics import litellm-logs.jsonl --out data/mine.jsonl # gateway logs (LiteLLM, Helicone, OpenAI pairs) as conversations
+tokenomics import litellm-logs.jsonl --out data/mine.jsonl # gateway logs (LiteLLM, Helicone, OpenAI or Anthropic pairs) as conversations
+tokenomics import my-logs.jsonl --mapping my-logs.toml     # any other JSON logs, fields named in a mapping
 tokenomics analyze samples/02_sql_debug.json                # one conversation: tags, cost, actions, reasons
 tokenomics report data/wildchat.jsonl --by task,subtask     # spend grouped by tags, coverage, savings
 tokenomics report data/wildchat.jsonl --save data/findings.json
@@ -51,7 +52,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--account-name", default=None)
     ap.add_argument("--json", action="store_true", help="print full findings, audit included")
     ap.add_argument("--by", default=None, help="report: comma-separated tag keys to group spend by (any taxonomy tag, app, or a declared tag)")
-    ap.add_argument("--format", default="auto", help="import: litellm, helicone, openai, or auto (from the first row's keys)")
+    ap.add_argument("--format", default="auto", help="import: litellm, helicone, openai, anthropic, custom (with --mapping), or auto (from the first row's keys)")
+    ap.add_argument("--mapping", default=None, help="import: a TOML naming which field of your rows holds what (see tokenomics.logs.Mapping); implies --format custom")
     ap.add_argument("--sample", type=float, default=None, help="report: tag only N cost-weighted draws (or a fraction, 0.02), with 90%% intervals; spend is still counted in full")
     ap.add_argument("--prices", default=None, help="a price table TOML (default: tokenomics/prices.toml)")
     ap.add_argument("--taxonomy", default=None, help="a tag taxonomy TOML (default: tokenomics/taxonomy.toml)")
@@ -72,7 +74,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"wrote {len(convs)} conversations to {out} (WildChat-4.8M, ODC-BY: attribute AI2 when you publish from it)")
         return
     if args.command == "import":
-        convs = read_logs(args.path, args.format)
+        convs = read_logs(args.path, args.format, args.mapping)
         out = Path(args.out or "data/imported.jsonl")
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in convs))

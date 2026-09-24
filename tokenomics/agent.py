@@ -253,7 +253,7 @@ def report(findings: list[Finding], by: tuple[str, ...] | None = None, labels: d
     tagged: dict[str, float] = defaultdict(float)
     declared: dict[str, float] = defaultdict(float)
     full = biz = measured_in = 0.0
-    tokens = {"input": 0.0, "cached": 0.0, "output": 0.0}
+    tokens = {"input": 0.0, "cached": 0.0, "cache_write": 0.0, "output": 0.0}
     out_measured = 0.0
     for f in findings:
         g = groups[group(f)]
@@ -275,6 +275,7 @@ def report(findings: list[Finding], by: tuple[str, ...] | None = None, labels: d
         measured_in += f.spend if f.cost.input_measured else 0.0
         tokens["input"] += f.cost.input_tokens * f.scale
         tokens["cached"] += f.cost.cached_tokens * f.scale
+        tokens["cache_write"] += (f.cost.cache_write_tokens + f.cost.cache_write_1h_tokens) * f.scale
         tokens["output"] += f.cost.output_tokens * f.scale
         out_measured += f.cost.output_measured * f.scale
     usd = lambda x: round(x / covered * total, 4) if covered else 0.0  # noqa: E731  a covered-spend amount as population dollars

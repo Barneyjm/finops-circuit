@@ -2,8 +2,9 @@
 
 A chat API is sent the whole conversation on every turn, so a reply's input is everything said
 before it. Where a log records what the provider billed (an assistant turn's `usage`:
-`input_tokens`, `output_tokens`, `cached_tokens`), those counts are used as they are and cached
-tokens are priced at the cache rate. Where it does not, output tokens come from the turn's
+`input_tokens`, `output_tokens`, `cached_tokens`, and where the provider bills writing the cache
+apart, `cache_write_tokens` and `cache_write_1h_tokens`), those counts are used as they are:
+cached tokens bill at the cache rate, tokens written to the cache at the write rate. Where it does not, output tokens come from the turn's
 `tokens` (WildChat records them) or its length, input tokens are the history before the reply,
 nothing is cached, and the counts are marked as estimated.
 
@@ -30,11 +31,21 @@ class Price:
     output: float
     cached_input: float | None = None  # None: no prompt cache for this model
     discount: float = 0.0  # contracted discount off list, 0 to 1
+    cache_write: float | None = None  # writing the (5-minute) cache, where billed apart; None: full price
+    cache_write_1h: float | None = None  # writing the 1-hour cache
 
     @property
     def cached(self) -> float:
         """What a cached input token bills at: the cache price, or full price without a cache."""
         return self.input if self.cached_input is None else self.cached_input
+
+    @property
+    def written(self) -> float:
+        return self.input if self.cache_write is None else self.cache_write
+
+    @property
+    def written_1h(self) -> float:
+        return self.input if self.cache_write_1h is None else self.cache_write_1h
 
     def cache_savings(self, tokens: int) -> float:
         """What serving `tokens` of input from a prompt cache would take off the list price."""
@@ -63,7 +74,8 @@ def load_prices(path: str | Path | None = None) -> PriceTable:
     settings = raw.get("settings", {})
     models = {}
     for name, spec in raw.get("models", {}).items():
-        p = Price(float(spec["input"]), float(spec["output"]), float(spec["cached_input"]) if "cached_input" in spec else None, float(spec.get("discount", 0.0)))
+        cached, write, write_1h = (float(spec[k]) if k in spec else None for k in ("cached_input", "cache_write", "cache_write_1h"))
+        p = Price(float(spec["input"]), float(spec["output"]), cached, float(spec.get("discount", 0.0)), write, write_1h)
         if not 0 <= p.discount < 1:
             raise ValueError(f"model {name!r}: discount must be from 0 to 1")
         models[name] = p
@@ -84,18 +96,22 @@ def tokens(text: str) -> int:
 @dataclass
 class Cost:
     model: str
-    input_tokens: int  # all input, cached included
+    input_tokens: int  # all input, cached and cache writes included
     output_tokens: int
     output_measured: int = 0  # of output_tokens, how many the log recorded rather than estimated
     cached_tokens: int = 0  # of input, read from the provider's cache
     input_measured: bool = False  # the log recorded input and cache counts; otherwise estimated
     resent_tokens: int = 0  # history sent again at full price: what a prompt cache would serve
+    cache_write_tokens: int = 0  # of input, written to the provider's cache (5-minute)
+    cache_write_1h_tokens: int = 0  # and to its 1-hour cache
     usd: float = 0.0  # at list prices
     contracted_usd: float = 0.0  # after the contract discount
     usd_on_small_model: float = 0.0  # the same tokens at the small model's prices
     resent_usd: float = 0.0  # what resent_tokens cost
     input_usd: float = 0.0  # usd split by charge, as FOCUS bills it: full-price input,
     cached_usd: float = 0.0  # cached input,
+    cache_write_usd: float = 0.0  # cache writes,
+    cache_write_1h_usd: float = 0.0
     output_usd: float = 0.0  # and output
     currency: str = "USD"
 
@@ -103,17 +119,21 @@ class Cost:
 def bill(c: Cost, table: PriceTable) -> Cost:
     """`c`'s token counts at `table`'s prices: every dollar field again, the counts as they are."""
     p, s = table.of(c.model), table.of(table.small_model)
-    full_in = c.input_tokens - c.cached_tokens
+    w, w1h = c.cache_write_tokens, c.cache_write_1h_tokens
+    full_in = c.input_tokens - c.cached_tokens - w - w1h
     input_usd, cached_usd, output_usd = full_in * p.input / 1e6, c.cached_tokens * p.cached / 1e6, c.output_tokens * p.output / 1e6
-    usd = input_usd + cached_usd + output_usd
+    write_usd, write_1h_usd = w * p.written / 1e6, w1h * p.written_1h / 1e6
+    usd = input_usd + cached_usd + write_usd + write_1h_usd + output_usd
     return replace(
         c,
         usd=usd,
         contracted_usd=usd * (1 - p.discount),
-        usd_on_small_model=(full_in * s.input + c.cached_tokens * s.cached + c.output_tokens * s.output) / 1e6,
+        usd_on_small_model=(full_in * s.input + c.cached_tokens * s.cached + w * s.written + w1h * s.written_1h + c.output_tokens * s.output) / 1e6,
         resent_usd=c.resent_tokens * p.input / 1e6,
         input_usd=input_usd,
         cached_usd=cached_usd,
+        cache_write_usd=write_usd,
+        cache_write_1h_usd=write_1h_usd,
         output_usd=output_usd,
         currency=table.currency,
     )
@@ -121,10 +141,11 @@ def bill(c: Cost, table: PriceTable) -> Cost:
 
 def cost(model: str, turns: list[dict], prices: PriceTable | None = None) -> Cost:
     """`turns`: [{"role", "content", "tokens"?, "usage"?, "prompt"?}], in order. An assistant turn's
-    `usage` ({"input_tokens", "output_tokens", "cached_tokens"}) is the provider's own count; one
+    `usage` ({"input_tokens", "output_tokens", "cached_tokens", "cache_write_tokens"?,
+    "cache_write_1h_tokens"?}) is the provider's own count; one
     marked `prompt` was sent as input (a few-shot example), not generated, and bills as input."""
     history = sent = 0  # sent: tokens already sent once as input
-    total_in = cached = total_out = measured_out = resent = replies = 0
+    total_in = cached = written = written_1h = total_out = measured_out = resent = replies = 0
     measured_in = True
     for t in turns:
         n = t.get("tokens") or tokens(t["content"])
@@ -134,6 +155,8 @@ def cost(model: str, turns: list[dict], prices: PriceTable | None = None) -> Cos
             if "input_tokens" in u:
                 total_in += int(u["input_tokens"])
                 cached += int(u.get("cached_tokens", 0))
+                written += int(u.get("cache_write_tokens", 0))
+                written_1h += int(u.get("cache_write_1h_tokens", 0))
             else:
                 measured_in = False
                 total_in += history  # this reply was generated from everything before it
@@ -144,5 +167,5 @@ def cost(model: str, turns: list[dict], prices: PriceTable | None = None) -> Cos
             measured_out += out if ("output_tokens" in u or t.get("tokens")) else 0
             n = out
         history += n
-    counts = Cost(model, total_in, total_out, measured_out, cached, measured_in and replies > 0, max(0, resent - cached))
+    counts = Cost(model, total_in, total_out, measured_out, cached, measured_in and replies > 0, max(0, resent - cached), written, written_1h)
     return bill(counts, prices or default_prices())

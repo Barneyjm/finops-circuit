@@ -1,7 +1,7 @@
 """Findings as a FOCUS 1.4 Cost and Usage dataset (https://focus.finops.org), in CSV.
 
 Each conversation is a usage charge per kind of token: input, cached input (when any was
-read from a prompt cache) and output, each priced separately, so each is its own SKU and row.
+read from a prompt cache), cache writes (where the provider bills them apart) and output, each priced separately, so each is its own SKU and row.
 The mapping:
 
     ServiceCategory / ServiceSubcategory   AI and Machine Learning / Generative AI
@@ -81,7 +81,7 @@ def _tags(tags: dict[str, str], source: dict[str, str]) -> str:
 
 
 def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: str = "LLM usage") -> Iterator[dict[str, Any]]:
-    """FOCUS rows per finding: input tokens, cached input tokens (when there are any), output
+    """FOCUS rows per finding: input tokens, cached input and cache write tokens (when there are any), output
     tokens, billed as the finding's cost line split them, so the rows add up to its spend."""
     for f in findings:
         f = f if isinstance(f, Finding) else Finding.from_dict(f)
@@ -119,8 +119,10 @@ def rows(findings: list[Any], *, account_id: str = "llm-usage", account_name: st
             "x_BusinessUse": "" if f.business is None else str(bool(f.business)).lower(),
         }
         charges = [
-            ("input", c.input_tokens - c.cached_tokens, c.input_usd, not c.input_measured),
+            ("input", c.input_tokens - c.cached_tokens - c.cache_write_tokens - c.cache_write_1h_tokens, c.input_usd, not c.input_measured),
             ("cached-input", c.cached_tokens, c.cached_usd, not c.input_measured),
+            ("cache-write", c.cache_write_tokens, c.cache_write_usd, not c.input_measured),
+            ("cache-write-1h", c.cache_write_1h_tokens, c.cache_write_1h_usd, not c.input_measured),
             ("output", c.output_tokens, c.output_usd, c.output_measured < c.output_tokens),
         ]
         charges = [ch for ch in charges if ch[1] > 0]  # no row for a kind of token the conversation did not use
