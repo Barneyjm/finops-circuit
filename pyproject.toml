@@ -5,7 +5,7 @@ description = "An LLM FinOps agent on decision circuits: what each conversation 
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["decision-circuits>=0.5.4"]
+dependencies = ["decision-circuits>=0.5.5"]  # 0.5.5 retries a rate-limited backend (429) instead of dropping the call
 
 [project.optional-dependencies]
 openai = ["decision-circuits[openai]"]

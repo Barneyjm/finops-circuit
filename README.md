@@ -74,6 +74,19 @@ answers, the `app` tag never sees the model, and the gates run in the decision-c
 on the client, the same arithmetic whichever backend answered (and proved in Lean in that
 repo).
 
+## Install
+
+As a command, from the repo (it is private, so this uses your GitHub access):
+
+```bash
+uv tool install git+https://github.com/Barneyjm/finops-circuit      # or: pipx install git+https://...
+finops --help
+```
+
+Upgrade with `uv tool upgrade finops-circuit`. The default backend (circuit-1.7b, hosted) issues
+its own free key, so the first run needs no configuration; other backends read their key from the
+environment (see `.env.example`).
+
 ## Run it
 
 ```bash
