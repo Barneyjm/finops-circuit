@@ -1,15 +1,35 @@
 [project]
 name = "finops-circuit"
 version = "0.1.0"
-description = "An LLM FinOps agent on decision circuits: what each conversation cost, what it was worth, and what to change"
+description = "Tag LLM spend the way cloud spend is tagged, with calibrated decision models, and export it as FOCUS 1.4"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "James Barney" }]
+keywords = ["finops", "focus", "llm", "cost", "tagging", "chargeback", "showback", "decision-circuits", "calibration"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = ["decision-circuits>=0.5.5"]  # 0.5.5 retries a rate-limited backend (429) instead of dropping the call
 
 [project.optional-dependencies]
 openai = ["decision-circuits[openai]"]
 anthropic = ["decision-circuits[anthropic]"]
+
+[project.urls]
+Homepage = "https://decisioncircuits.com"
+Source = "https://github.com/Barneyjm/finops-circuit"
+Changelog = "https://github.com/Barneyjm/finops-circuit/commits/main"
 
 [project.scripts]
 finops = "finops.cli:main"
@@ -20,6 +40,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["finops"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["scripts/", ".github/"]  # model-training tooling, not part of the package
 
 [tool.ruff]
 line-length = 200

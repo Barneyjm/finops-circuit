@@ -76,10 +76,8 @@ repo).
 
 ## Install
 
-As a command, from the repo (it is private, so this uses your GitHub access):
-
 ```bash
-uv tool install git+https://github.com/Barneyjm/finops-circuit      # or: pipx install git+https://...
+uv tool install finops-circuit      # or: pipx install finops-circuit
 finops --help
 ```
 
@@ -260,7 +258,7 @@ add up: a downgrade's caching figure is priced on the small model, not twice.
 
 ## Prices and token usage
 
-Prices live in [`finops/prices.toml`](finops/prices.toml): per model, `input`, `output`,
+Prices live in `finops/prices.toml`: per model, `input`, `output`,
 `cached_input` (leave it out where there is no prompt cache) and `discount` (your contracted
 discount off list, 0 to 1), plus the table's `currency` and the `small_model` downgrades are
 priced on. A model matches the longest key its name starts with. Copy the file and pass it:
